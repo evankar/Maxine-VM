@@ -45,6 +45,24 @@ public final class RISCV64TargetMethodUtil {
     public static final int RET = 0x8067;
 
     /**
+     * The limits of an unconditional branch encoded as a 28-bit signed number.
+     */
+    public static final int MAX_BRANCH = (1 << 19) - 1;
+    public static final int MIN_BRANCH = -(1 << 19);
+
+    /**
+     * Test whether displacement is within range of a branch immediate instruction.
+     * @param displacement
+     * @return
+     */
+    private static boolean inBranchRange(int displacement) {
+        if (displacement > MAX_BRANCH || displacement < MIN_BRANCH) {
+            return false;
+        }
+        return true;
+    }
+
+    /**
      * Extract an instruction from the code array which starts at index=idx.
      * @param code
      * @param idx
@@ -68,6 +86,18 @@ public final class RISCV64TargetMethodUtil {
     public static CodePointer readCall32Target(TargetMethod tm, int callPos) {
         final CodePointer callSite = tm.codeAt(callPos);
         return readCall32Target(callSite);
+    }
+
+    public static CodePointer readCall32Target(CodePointer callSite) {
+        Pointer callSitePointer = callSite.toPointer();
+        int instruction = callSitePointer.readInt(0);
+        assert isBimmInstruction(instruction) : instruction;
+        final int offset = bImmExtractDisplacement(instruction);
+        if (isTrampolineSite(callSitePointer.plus(offset))) {
+            long target = callSitePointer.plus(offset).readLong(TRAMPOLINE_ADDRESS_OFFSET);
+            return CodePointer.from(target);
+        }
+        return callSite.plus(offset);
     }
 
     /**
