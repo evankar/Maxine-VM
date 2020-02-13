@@ -26,17 +26,6 @@ import com.sun.cri.ci.*;
 import com.sun.cri.ri.RiRegisterConfig;
 
 public class RISCV64MacroAssembler extends RISCV64Assembler {
-    public static final int PLACEHOLDER_INSTRUCTIONS_FOR_LONG_OFFSETS = 15;
-    public static final int INSTRUCTION_SIZE = 4;
-
-    public static final int CALL_TRAMPOLINE_INSTRUCTIONS = 6;
-    public static final int RIP_CALL_INSTRUCTION_SIZE = ((2 * CALL_TRAMPOLINE_INSTRUCTIONS) + 1) * INSTRUCTION_SIZE;
-    public static final int CALL_TRAMPOLINE1_OFFSET = INSTRUCTION_SIZE;
-    public static final int CALL_TRAMPOLINE2_OFFSET = INSTRUCTION_SIZE * (CALL_TRAMPOLINE_INSTRUCTIONS + 1);
-    public static final int CALL_BRANCH_OFFSET = RIP_CALL_INSTRUCTION_SIZE - INSTRUCTION_SIZE;
-    public static final int MOV_OFFSET_IN_TRAMPOLINE = 2 * INSTRUCTION_SIZE;
-
-    private  static final int MOV_32_BIT_CONSTANT_INSTRUCTION_NUMBER = 2;
 
     /**
      * Same variables are declared in RISCV64T1XCompilation. However the values here are decremented by one because
@@ -1252,25 +1241,7 @@ public class RISCV64MacroAssembler extends RISCV64Assembler {
     }
 
     public final void call() {
-        int before = codeBuffer.position();
-        jal(RISCV64.zero, CALL_TRAMPOLINE1_OFFSET); // Jump to Trampoline 1
-        // Trampoline 1
-        auipc(scratchRegister1, 0);
-        addi(scratchRegister1, scratchRegister1, CALL_BRANCH_OFFSET - CALL_TRAMPOLINE1_OFFSET);
-        nop(MOV_32_BIT_CONSTANT_INSTRUCTION_NUMBER); // mov32BitConstant(scratchRegister, 0);
-        add(64, scratchRegister, scratchRegister1, scratchRegister);
-
-        jal(RISCV64.zero, CALL_TRAMPOLINE_INSTRUCTIONS * INSTRUCTION_SIZE); // Jump to last branch
-        // Trampoline 2
-        auipc(scratchRegister1, 0);
-        addi(scratchRegister1, scratchRegister1, CALL_BRANCH_OFFSET - CALL_TRAMPOLINE2_OFFSET);
-        nop(MOV_32_BIT_CONSTANT_INSTRUCTION_NUMBER); // mov32BitConstant(scratchRegister, 0);
-        add(64, scratchRegister, scratchRegister1, scratchRegister);
-        int after = codeBuffer.position();
-        assert CALL_BRANCH_OFFSET == after - before : after - before;
-        jalr(RISCV64.ra, scratchRegister, 0);
-        after = codeBuffer.position();
-        assert RIP_CALL_INSTRUCTION_SIZE == after - before : after - before;
+        jal(RISCV64.ra, 0);
     }
 
     public final void ret() {

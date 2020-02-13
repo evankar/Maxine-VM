@@ -19,10 +19,14 @@
  */
 package com.oracle.max.asm.target.riscv64;
 
+import static com.oracle.max.asm.target.aarch64.Aarch64Assembler.InstructionType.General64;
 import static com.oracle.max.asm.target.riscv64.RISCV64.*;
 import static com.oracle.max.asm.target.riscv64.RISCV64opCodes.*;
 
 import com.oracle.max.asm.*;
+import com.oracle.max.asm.target.aarch64.Aarch64;
+import com.oracle.max.asm.target.aarch64.Aarch64Address;
+import com.oracle.max.asm.target.aarch64.Aarch64Assembler;
 import com.sun.cri.ci.*;
 import com.sun.cri.ri.RiRegisterConfig;
 
@@ -1234,5 +1238,61 @@ public class RISCV64Assembler extends AbstractAssembler {
         int imm32 = rl + (aq << 1) + (0b00011 << 2);
         rtype(LRSC, dest, 0b011, addr, src, imm32);
     }
+
+    /** The number of instructions in a trampoline. */
+    public static final int TRAMPOLINE_INSTRUCTIONS = 3;
+
+    /** The instruction size on RISCV */
+    public static final int INSTRUCTION_SIZE = 4;
+
+    /** The size of a trampoline in bytes. */
+    public static final int TRAMPOLINE_SIZE = (TRAMPOLINE_INSTRUCTIONS * INSTRUCTION_SIZE) + Long.BYTES;
+
+    /** The offset of the address operand in a trampoline. */
+    public static final int TRAMPOLINE_ADDRESS_OFFSET = TRAMPOLINE_INSTRUCTIONS * INSTRUCTION_SIZE;
+
+    /**
+     * An address describing the PC relative offset of the trampoline address in the trampoline
+     * itself. That is +12 from the PC. The trampoline has the format:
+     * <code>
+     * auipc x28 12     ;adding 12 bytes to pc
+     * lw x28 x28 0     ;loading target on x28 scratch register
+     * jalr x0 x28 0    ;jump to target
+     * 0x0000_0000_0000_0000    ; target address
+     * </code>
+     */
+
+
+    @Override
+    public byte[] trampolines(int count) {
+        byte[] trampolines = new byte[count * TRAMPOLINE_SIZE];
+        for (int i = 0; i < trampolines.length; i += TRAMPOLINE_SIZE) {
+            auipc(x28,TRAMPOLINE_ADDRESS_OFFSET);
+            writeInt(0xce17, trampolines, i);
+            lw(x28,x28,0);
+            writeInt(0xe0e03, trampolines, i + INSTRUCTION_SIZE);
+            jalr(x0,x28,0);
+            writeInt(0xe0067, trampolines, i + INSTRUCTION_SIZE +INSTRUCTION_SIZE);
+        }
+        return trampolines;
+    }
+
+    /**
+     * Write an integer in little endian order into the byte array at the specified offset.
+     * @param instruction
+     * @param buffer
+     * @param offset
+     */
+    static void writeInt(int instruction, byte[] buffer, int offset) {
+        assert buffer.length >= offset + 3 : "Buffer too small";
+        buffer[offset + 0] = (byte) (instruction       & 0xFF);
+        buffer[offset + 1] = (byte) (instruction >> 8  & 0xFF);
+        buffer[offset + 2] = (byte) (instruction >> 16 & 0xFF);
+        buffer[offset + 3] = (byte) (instruction >> 24 & 0xFF);
+    }
+
+
+
+
 
 }
