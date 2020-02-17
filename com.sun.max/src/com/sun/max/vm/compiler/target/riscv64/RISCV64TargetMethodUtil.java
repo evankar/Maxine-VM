@@ -121,6 +121,18 @@ public final class RISCV64TargetMethodUtil {
         return readCall32Target(callSite);
     }
 
+    public static CodePointer readCall32Target(CodePointer callSite) {
+        Pointer callSitePointer = callSite.toPointer();
+        int instruction = callSitePointer.readInt(0);
+        assert isBimmInstruction(instruction) : instruction;
+        final int offset = bImmExtractDisplacement(instruction);
+        if (isTrampolineSite(callSitePointer.plus(offset))) {
+            long target = callSitePointer.plus(offset).readLong(TRAMPOLINE_ADDRESS_OFFSET);
+            return CodePointer.from(target);
+        }
+        return callSite.plus(offset);
+    }
+
     /**
      * Gets the target of a 32-bit relative CALL instruction.
      *
