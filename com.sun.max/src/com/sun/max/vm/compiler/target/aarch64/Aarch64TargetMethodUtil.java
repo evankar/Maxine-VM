@@ -127,6 +127,16 @@ public final class Aarch64TargetMethodUtil {
 
     /**
      * Return the target of a call site.
+     * @param tm
+     * @param callPos
+     * @return
+     */
+    public static CodePointer readCall32Target(TargetMethod tm, int callPos) {
+        return readCall32Target(tm.codeAt(callPos));
+    }
+
+    /**
+     * Return the target of a call site.
      * @param callSite
      * @return
      */
@@ -461,9 +471,5 @@ public final class Aarch64TargetMethodUtil {
         TargetMethod tm = frame.targetMethod();
         Pointer sp = frame.sp();
         return sp.plus(tm.frameSize());
-    }
-
-    public static CodePointer readCall32Target(TargetMethod tm, int callPos) {
-        return readCall32Target(tm.codeAt(callPos));
     }
 }

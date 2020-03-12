@@ -21,6 +21,7 @@
 package com.sun.max.vm.compiler.target.riscv64;
 
 import com.oracle.max.asm.NumUtil;
+import com.oracle.max.cri.intrinsics.MemoryBarriers;
 import com.oracle.max.asm.target.riscv64.*;
 import com.sun.cri.ci.CiCalleeSaveLayout;
 import com.sun.max.annotate.HOSTED_ONLY;
@@ -34,6 +35,8 @@ import com.sun.max.vm.stack.StackFrameCursor;
 import com.sun.max.vm.stack.StackFrameWalker;
 
 import static com.oracle.max.asm.target.riscv64.RISCV64MacroAssembler.*;
+import static com.sun.max.vm.compiler.target.TargetMethod.useSystemMembarrier;
+import static com.sun.max.vm.compiler.target.TargetMethod.useNonMandatedSystemMembarrier;
 
 public final class RISCV64TargetMethodUtil {
 
@@ -45,7 +48,19 @@ public final class RISCV64TargetMethodUtil {
     public static final int RET = 0x8067;
 
     /**
-     * The limits of an unconditional branch encoded as a 28-bit signed number.
+     * Instruction encodings for call trampolines.
+     * auipc x28, #12
+     */
+    private static final int AUIPC_X28_12 = 0xce17;
+
+    /** lw x28, 0(x28) */
+    private static final int LW_X28 = 0xe0e03;
+
+    /** jr x28 */
+    private static final int JR_X28 = 0xe0067;
+
+    /**
+     * The limits of an unconditional branch encoded as a 20-bit signed number.
      */
     public static final int MAX_BRANCH = (1 << 19) - 1;
     public static final int MIN_BRANCH = -(1 << 19);
@@ -77,6 +92,27 @@ public final class RISCV64TargetMethodUtil {
     }
 
     /**
+     * Test whether the memory location contains the trampoline instruction sequence.
+     * @param p
+     * @return
+     */
+    private static boolean isTrampolineSite(Pointer p) {
+        if (AUIPC_X28_12 == p.readInt(0) && LW_X28 == p.readInt(INSTRUCTION_SIZE) && JR_X28 == p.readInt(2 * INSTRUCTION_SIZE)) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Indicate if the code at the address of the pointer parameter is an indirect call.
+     * @param p
+     * @return
+     */
+    private static boolean isIndirectCallSite(Pointer p) {
+        return isTrampolineSite(p);
+    }
+
+    /**
      * Gets the target of a 32-bit relative CALL instruction.
      *
      * @param tm the method containing the CALL instruction
@@ -86,18 +122,6 @@ public final class RISCV64TargetMethodUtil {
     public static CodePointer readCall32Target(TargetMethod tm, int callPos) {
         final CodePointer callSite = tm.codeAt(callPos);
         return readCall32Target(callSite);
-    }
-
-    public static CodePointer readCall32Target(CodePointer callSite) {
-        Pointer callSitePointer = callSite.toPointer();
-        int instruction = callSitePointer.readInt(0);
-        assert isBimmInstruction(instruction) : instruction;
-        final int offset = bImmExtractDisplacement(instruction);
-        if (isTrampolineSite(callSitePointer.plus(offset))) {
-            long target = callSitePointer.plus(offset).readLong(TRAMPOLINE_ADDRESS_OFFSET);
-            return CodePointer.from(target);
-        }
-        return callSite.plus(offset);
     }
 
     /**
@@ -111,11 +135,126 @@ public final class RISCV64TargetMethodUtil {
         int instruction = callSitePointer.readInt(0);
         assert isJumpInstruction(instruction) : instruction;
         final int offset = jumpAndLinkExtractDisplacement(instruction);
-        assert offset == CALL_TRAMPOLINE1_OFFSET || offset == CALL_TRAMPOLINE2_OFFSET : offset;
+        assert offset == TRAMPOLINE_SIZE : offset;
         callSitePointer = callSitePointer.plus(offset);
         int displacement = getDisplacementFromTrampoline(callSitePointer);
         final CodePointer branchSite = callSite.plus(CALL_BRANCH_OFFSET);
         return branchSite.plus(displacement);
+    }
+
+    /**
+     * Patch a callsite: if the target is within range of a single branch instruction then
+     * that is patched at the callsite; otherwise the trampoline is patched. The target prior
+     * to patching is returned.
+     * fixingUp identifies when a call-site is being fixed-up (see {@linkplain TargetMethod#fixupCallSite}).
+     * A call site being fixed-up cannot be executed by another thread and so no specific consideration to
+     * concurrent modification and execution is required during patching as long as the relevant cache maintenance is
+     * carried out on the affected addresses after fixing up.
+     * 
+     * @param tm
+     * @param callOffset
+     * @param target
+     * @param fixingUp identifies when fixing up as opposed to patching a concurrently executable call-site.
+     * @return
+     */
+    private static long patchCallSite(TargetMethod tm, CodePointer callSite, Pointer target, boolean fixingUp) {
+        long disp = target.toLong() - callSite.toLong();
+        int disp20 = (int) disp;
+        if (inBranchRange(disp20)) {
+            return maybePatchBranchImmediate(callSite, disp20, fixingUp);
+        }
+        return maybePatchTrampolineCall(tm, callSite, target, disp20, fixingUp);
+    }
+
+    /**
+     * Patch the address operand of a trampoline call if the current target differs from the new target. Optionally
+     * patch the address of the call site branch to steer execution to the trampoline. Returns the address of
+     * the old target prior to any patching.
+     *
+     * @param tm
+     * @param callSite
+     * @param target
+     * @param disp
+     * @param fixingUp identifies when fixing up as opposed to patching a concurrently executable call-site.
+     * @return
+     */
+    private static long maybePatchTrampolineCall(TargetMethod tm, CodePointer callSite, Pointer target, int disp, boolean fixingUp) {
+        int callOffset = (int) (callSite.toLong() - tm.codeStart().toLong());
+        // locate the trampoline site that corresponds to the call site.
+        int pos = Safepoints.safepointPosForCall(callOffset, INSTRUCTION_SIZE);
+        int spIndex = tm.safepoints().indexOfCallAt(pos);
+        CodePointer trampolineSite = tm.trampolineStart().plus(spIndex * TRAMPOLINE_SIZE);
+        assert isTrampolineSite(trampolineSite.toPointer());
+        long oldTarget = trampolineSite.toPointer().readLong(2 * INSTRUCTION_SIZE);
+
+        if (target.toLong() != oldTarget) {
+            trampolineSite.toPointer().writeLong(TRAMPOLINE_ADDRESS_OFFSET, target.toLong());
+            /*
+             * For concurrent modification and execution a memory barrier here prevents the possibility
+             * of the previous store of the target address being ordered after the call site store (if it
+             * is updated).
+             */
+            if (!fixingUp) {
+                MemoryBarriers.barrier(MemoryBarriers.STORE_LOAD);
+            }
+        }
+
+        long callTarget = maybePatchBranchImmediate(callSite, trampolineSite.minus(callSite).toInt(), fixingUp);
+
+        if (callTarget != trampolineSite.toLong()) {
+            return callTarget;
+        }
+        return oldTarget;
+    }
+
+    /**
+     * Patch an unconditional branch immediate call site if the displacement of the current branch
+     * is not equal to the displacement parameter. 
+     * Returns the address of the target prior to patching.
+     * 
+     * @param callSite
+     * @param disp32
+     * @param fixingUp identifies when fixing up as opposed to patching a concurrently executable call-site.
+     * @return
+     */
+    private static long maybePatchBranchImmediate(CodePointer callSite, int disp32, boolean fixingUp) {
+        int instruction = callSite.toPointer().readInt(0);
+        assert isJumpInstruction(instruction) : instruction;
+        int oldDisp = jumpAndLinkExtractDisplacement(instruction);
+        boolean isLinked = isJumpLinked(instruction);
+        if (oldDisp != disp32) {
+            patchBranchImmediate(callSite.toPointer(), disp32, isLinked, fixingUp);
+        }
+        return callSite.plus(oldDisp).toLong();
+    }
+
+    /**
+     * Pre conditions:
+     *   CallSite has already been validated such that:
+     *     a). it is the site of an unconditional branch immediate
+     *     b). the present target != new target
+     * @param callSite
+     * @param displacement
+     * @param isLinked
+     * @param fixingUp identifies when fixing up as opposed to patching a concurrently executable call-site.
+     * @return
+     */
+    private static void patchBranchImmediate(Pointer callSite, int displacement, boolean isLinked, boolean fixingUp) {
+        int instruction = jumpAndLinkImmediateHelper(RISCV64.zero, displacement);
+        callSite.writeInt(0, instruction);
+        /*
+         * Although no explicit synchronisation is mandated by the architecture when patching b -> b, doing
+         * so here makes the modified instruction observable.
+         */
+        if (!fixingUp) {
+            MaxineVM.maxine_cache_flush(callSite, INSTRUCTION_SIZE);
+            /* The following memory barrier is not mandated by the architecture, however it ensures that the
+             * modified branch is globally visible at the expense of the barrier.
+             */
+            if (useSystemMembarrier() && useNonMandatedSystemMembarrier()) {
+                MaxineVM.syscall_membarrier();
+            }
+        }
     }
 
     private static int getDisplacementFromTrampoline(Pointer callSitePointer) {
@@ -134,17 +273,6 @@ public final class RISCV64TargetMethodUtil {
             displacement = -displacement;
         }
         return displacement;
-    }
-
-    private static void patchCallTrampoline(Pointer patchSite, int displacement, boolean isLinked) {
-        int instruction = patchSite.readInt(0);
-        int offset = jumpAndLinkExtractDisplacement(instruction);
-        // The bimm offset must either point to one of the two trampolines or outside of them
-        assert (offset == CALL_TRAMPOLINE1_OFFSET) || (offset == CALL_TRAMPOLINE2_OFFSET) : offset;
-        // Get the offset of the unused trampoline
-        offset = offset == CALL_TRAMPOLINE1_OFFSET ? CALL_TRAMPOLINE2_OFFSET : CALL_TRAMPOLINE1_OFFSET;
-        // Create the new trampoline
-        patchBranchRegister(patchSite, displacement, isLinked, offset);
     }
 
     private static void patchBranchRegister(Pointer patchSite, int displacement, boolean isLinked, int offset) {
@@ -176,14 +304,14 @@ public final class RISCV64TargetMethodUtil {
         long disp64 = target.toLong() - patchSite.plus(CALL_BRANCH_OFFSET).toLong();
         int displacement = (int) disp64;
         assert displacement == disp64;
-        int branchOffset = CALL_BRANCH_OFFSET - CALL_TRAMPOLINE1_OFFSET;
-        patchSite.writeInt(CALL_TRAMPOLINE1_OFFSET + 4,
+        int branchOffset = CALL_BRANCH_OFFSET - CALL_TRAMPOLINE_OFFSET;
+        patchSite.writeInt(CALL_TRAMPOLINE_OFFSET + 4,
                 addImmediateHelper(RISCV64.x29, RISCV64.x29, branchOffset));
         branchOffset -= (CALL_TRAMPOLINE_INSTRUCTIONS - 1) * INSTRUCTION_SIZE;
-        patchSite.writeInt(CALL_TRAMPOLINE1_OFFSET + (CALL_TRAMPOLINE_INSTRUCTIONS - 1) * INSTRUCTION_SIZE,
+        patchSite.writeInt(CALL_TRAMPOLINE_OFFSET + (CALL_TRAMPOLINE_INSTRUCTIONS - 1) * INSTRUCTION_SIZE,
                 jumpAndLinkImmediateHelper(RISCV64.zero, branchOffset));
         // Don't move this call higher since it flushes the cache
-        patchBranchRegister(patchSite, displacement, false, CALL_TRAMPOLINE1_OFFSET);
+        patchBranchRegister(patchSite, displacement, false, CALL_TRAMPOLINE_OFFSET);
     }
 
     /**
@@ -234,14 +362,14 @@ public final class RISCV64TargetMethodUtil {
             synchronized (PatchingLock) {
                 // Just to prevent concurrent writing and invalidation to the same instruction cache line
                 // (although the lock excludes ALL concurrent patching)
-                fixupCall32Site(callSite, target);
+                patchCallSite(tm, callSite, target.toPointer(), false);
             }
         }
         return oldTarget;
     }
 
     /**
-     * Fixup the target displacement (19 bit) in a branch immediate instruction.
+     * Fixup the target displacement (28bit) in a branch immediate instruction.
      * Returns the old displacement.
      *
      * @param code - array containing the instruction
@@ -249,41 +377,18 @@ public final class RISCV64TargetMethodUtil {
      * @param displacement - the new displacement.
      * @return the previous displacement
      */
+    @HOSTED_ONLY
     public static int fixupCall19Site(byte [] code, int callOffset, int displacement) {
-        final boolean isNegative = displacement < 0;
-        if (isNegative) {
-            displacement = -displacement;
-        }
         int instruction = extractInstruction(code, callOffset);
-        int offset = jumpAndLinkExtractDisplacement(instruction);
-        // The bimm offset must either point to one of the two trampolines or outside of them
-        assert (offset == CALL_TRAMPOLINE1_OFFSET) || (offset == CALL_TRAMPOLINE2_OFFSET) : offset;
-        // Get the offset of the unused trampoline
-        offset = offset == CALL_TRAMPOLINE1_OFFSET ? CALL_TRAMPOLINE2_OFFSET : CALL_TRAMPOLINE1_OFFSET;
-        final int trampolineOffset = callOffset + offset;
-        int[] mov32BitConstantInstructions = mov32BitConstantHelper(RISCV64.x28, displacement);
-        for (int i = 0; i < mov32BitConstantInstructions.length; i++) {
-            instruction = mov32BitConstantInstructions[i];
-            if (instruction == 0) { // fill in with asm.nop() if mov32BitConstant did not need those instructions
-                instruction = addImmediateHelper(RISCV64.zero, RISCV64.zero, 0);
-            }
-            writeInstruction(code, trampolineOffset + MOV_OFFSET_IN_TRAMPOLINE + i * INSTRUCTION_SIZE, instruction);
-        }
-        // Create the new trampoline
-        instruction = addSubInstructionHelper(RISCV64.x28, RISCV64.x29, RISCV64.x28, isNegative);
-        writeInstruction(code, trampolineOffset + MOV_OFFSET_IN_TRAMPOLINE + mov32BitConstantInstructions.length * INSTRUCTION_SIZE, instruction);
-        instruction = extractInstruction(code, callOffset + CALL_BRANCH_OFFSET);
-        final boolean isLinked = isJumpLinked(instruction);
-        instruction = jumpAndLinkHelper(isLinked ? RISCV64.ra : RISCV64.x0, RISCV64.x28, 0);
-        writeInstruction(code, callOffset + CALL_BRANCH_OFFSET, instruction);
-        // Patch the JAL to jump to the new trampoline
-        instruction = jumpAndLinkImmediateHelper(RISCV64.zero, offset);
-        writeInstruction(code, callOffset, instruction);
+        assert isJumpInstruction(instruction) : "Not jump";
+        boolean isLinked = isJumpLinked(instruction);
+        int newBranch = jumpAndLinkImmediateHelper(RISCV64.zero, displacement);
+        writeInstruction(code, callOffset, newBranch);
         return 0;
     }
 
     private static void writeInstruction(byte[] code, int offset, int instruction) {
-        code[offset + 0] = (byte) (instruction       & 0xFF);
+        code[offset + 0] = (byte) (instruction         & 0xFF);
         code[offset + 1] = (byte) ((instruction >> 8)  & 0xFF);
         code[offset + 2] = (byte) ((instruction >> 16) & 0xFF);
         code[offset + 3] = (byte) ((instruction >> 24) & 0xFF);
@@ -310,27 +415,8 @@ public final class RISCV64TargetMethodUtil {
             final int oldDisplacement = fixupCall19Site(code, callOffset, disp32);
             return callSite.plus(oldDisplacement);
         } else {
-            return fixupCall32Site(callSite, target);
+            return CodePointer.from(patchCallSite(tm, callSite, target.toPointer(), true));
         }
-    }
-
-    private static CodePointer fixupCall32Site(CodePointer callSite, CodePointer target) {
-        final Pointer callSitePointer = callSite.toPointer();
-        CodePointer oldTarget = readCall32Target(callSite);
-        if (oldTarget.equals(target)) {
-            return oldTarget;
-        }
-        assert isJumpInstruction(callSitePointer.readInt(0)) : callSitePointer.readInt(0);
-        Pointer branchSitePointer = callSitePointer.plus(CALL_BRANCH_OFFSET);
-        int instruction = branchSitePointer.readInt(0);
-        final boolean isLinked = isJumpLinked(instruction);
-
-        long disp64 = target.toLong() - branchSitePointer.toLong();
-        int disp32 = (int) disp64;
-        FatalError.check(disp64 == disp32, "Code displacement out of 32-bit range: " + disp64);
-        patchCallTrampoline(callSitePointer, disp32, isLinked);
-
-        return oldTarget;
     }
 
     public static boolean isPatchableCallSite(CodePointer callSite) {
@@ -393,8 +479,7 @@ public final class RISCV64TargetMethodUtil {
     public static boolean isRIPCall(Pointer callIP) {
         int instruction = callIP.readInt(0);
         return isJumpInstruction(instruction)
-                && (jumpAndLinkExtractDisplacement(instruction) == CALL_TRAMPOLINE1_OFFSET
-                || jumpAndLinkExtractDisplacement(instruction) == CALL_TRAMPOLINE2_OFFSET);
+                && (jumpAndLinkExtractDisplacement(instruction) == CALL_TRAMPOLINE_OFFSET);
     }
 
     public static Pointer returnAddressPointer(StackFrameCursor frame) {
