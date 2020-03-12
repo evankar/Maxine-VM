@@ -65,12 +65,7 @@ ifeq ($(TARGETOS),Darwin)
     HOSTISA := $(shell uname -p)
 endif # Darwin
 ifeq ($(TARGETOS),Linux)
-<<<<<<< HEAD
-    # TARGETISA ?= $(shell uname -m)
-    TARGETISA = riscv64
-=======
-    HOSTISA := $(shell uname -m)
->>>>>>> bakaliosdim/bakdim
+    TARGETISA ?= $(shell uname -m)
 endif # Linux
 ifeq ($(TARGETOS),SunOS)
     HOSTISA := $(shell isainfo -n)
