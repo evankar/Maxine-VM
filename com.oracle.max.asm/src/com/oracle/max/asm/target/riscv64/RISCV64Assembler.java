@@ -36,7 +36,7 @@ public class RISCV64Assembler extends AbstractAssembler {
     
     public static final int CALL_TRAMPOLINE_INSTRUCTIONS = 3;
     public static final int TRAMPOLINE_SIZE = (CALL_TRAMPOLINE_INSTRUCTIONS * INSTRUCTION_SIZE) + Long.BYTES;
-    public static final int TRAMPOLINE_ADDRESS_OFFSET = CALL_TRAMPOLINE_INSTRUCTIONS * INSTRUCTION_SIZE;
+    public static final int RISC_TRAMPOLINE_ADDRESS_OFFSET = CALL_TRAMPOLINE_INSTRUCTIONS * INSTRUCTION_SIZE;
 
     public CiRegister frameRegister;
     public CiRegister scratchRegister;
@@ -1262,11 +1262,11 @@ public class RISCV64Assembler extends AbstractAssembler {
     public byte[] trampolines(int count) {
         byte[] trampolines = new byte[count * TRAMPOLINE_SIZE];
         for (int i = 0; i < trampolines.length; i += TRAMPOLINE_SIZE) {
-            auipc(x28,TRAMPOLINE_ADDRESS_OFFSET);
+            //auipc(x28,RISC_TRAMPOLINE_ADDRESS_OFFSET);
             writeInt(0xce17, trampolines, i);
-            lw(x28,x28,0);
+            //lw(x28,x28,0);
             writeInt(0xe0e03, trampolines, i + INSTRUCTION_SIZE);
-            jalr(x0,x28,0);
+            //jalr(x0,x28,0);
             writeInt(0xe0067, trampolines, i + INSTRUCTION_SIZE +INSTRUCTION_SIZE);
         }
         return trampolines;

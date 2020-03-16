@@ -34,6 +34,7 @@ import com.sun.max.vm.runtime.*;
 import com.sun.max.vm.stack.StackFrameCursor;
 import com.sun.max.vm.stack.StackFrameWalker;
 
+import static com.oracle.max.asm.target.aarch64.Aarch64Assembler.TRAMPOLINE_ADDRESS_OFFSET;
 import static com.oracle.max.asm.target.riscv64.RISCV64MacroAssembler.*;
 import static com.sun.max.vm.compiler.target.TargetMethod.useSystemMembarrier;
 import static com.sun.max.vm.compiler.target.TargetMethod.useNonMandatedSystemMembarrier;
@@ -135,11 +136,19 @@ public final class RISCV64TargetMethodUtil {
         int instruction = callSitePointer.readInt(0);
         assert isJumpInstruction(instruction) : instruction;
         final int offset = jumpAndLinkExtractDisplacement(instruction);
-        assert offset == TRAMPOLINE_SIZE : offset;
+        //assert offset == TRAMPOLINE_SIZE : offset;
+
+        if (isTrampolineSite(callSitePointer.plus(offset))) {
+            long target = callSitePointer.plus(offset).readLong(RISC_TRAMPOLINE_ADDRESS_OFFSET);
+            return CodePointer.from(target);
+        }
+        return callSite.plus(offset);
+        /*
         callSitePointer = callSitePointer.plus(offset);
+
         int displacement = getDisplacementFromTrampoline(callSitePointer);
         final CodePointer branchSite = callSite.plus(CALL_BRANCH_OFFSET);
-        return branchSite.plus(displacement);
+        return branchSite.plus(displacement); */
     }
 
     /**
@@ -213,17 +222,17 @@ public final class RISCV64TargetMethodUtil {
      * Returns the address of the target prior to patching.
      * 
      * @param callSite
-     * @param disp32
+     * @param disp20
      * @param fixingUp identifies when fixing up as opposed to patching a concurrently executable call-site.
      * @return
      */
-    private static long maybePatchBranchImmediate(CodePointer callSite, int disp32, boolean fixingUp) {
+    private static long maybePatchBranchImmediate(CodePointer callSite, int disp20, boolean fixingUp) {
         int instruction = callSite.toPointer().readInt(0);
         assert isJumpInstruction(instruction) : instruction;
         int oldDisp = jumpAndLinkExtractDisplacement(instruction);
         boolean isLinked = isJumpLinked(instruction);
-        if (oldDisp != disp32) {
-            patchBranchImmediate(callSite.toPointer(), disp32, isLinked, fixingUp);
+        if (oldDisp != disp20) {
+            patchBranchImmediate(callSite.toPointer(), disp20, isLinked, fixingUp);
         }
         return callSite.plus(oldDisp).toLong();
     }
@@ -405,7 +414,6 @@ public final class RISCV64TargetMethodUtil {
      */
     public static CodePointer fixupCall32Site(TargetMethod tm, int callOffset, CodePointer target) {
         CodePointer callSite = tm.codeAt(callOffset);
-
         if (MaxineVM.isHosted()) {
             long disp64 = target.toLong() - callSite.plus(CALL_BRANCH_OFFSET).toLong();
             int disp32 = (int) disp64;
