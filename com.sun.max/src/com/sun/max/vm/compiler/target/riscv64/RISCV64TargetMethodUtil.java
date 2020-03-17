@@ -415,7 +415,7 @@ public final class RISCV64TargetMethodUtil {
     public static CodePointer fixupCall32Site(TargetMethod tm, int callOffset, CodePointer target) {
         CodePointer callSite = tm.codeAt(callOffset);
         if (MaxineVM.isHosted()) {
-            long disp64 = target.toLong() - callSite.plus(CALL_BRANCH_OFFSET).toLong();
+            long disp64 = target.toLong() - callSite.toLong();
             int disp32 = (int) disp64;
             FatalError.check(disp64 == disp32, "Code displacement out of 32-bit range");
             assert NumUtil.isSignedNbit(19, disp32);
