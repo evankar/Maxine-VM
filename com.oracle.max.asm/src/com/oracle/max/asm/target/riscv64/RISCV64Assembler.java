@@ -33,7 +33,7 @@ import com.sun.cri.ri.RiRegisterConfig;
 public class RISCV64Assembler extends AbstractAssembler {
     public static final int PLACEHOLDER_INSTRUCTIONS_FOR_LONG_OFFSETS = 15;    
     public static final int INSTRUCTION_SIZE = 4;
-    
+
     public static final int CALL_TRAMPOLINE_INSTRUCTIONS = 3;
     public static final int TRAMPOLINE_SIZE = (CALL_TRAMPOLINE_INSTRUCTIONS * INSTRUCTION_SIZE) + Long.BYTES;
     public static final int TRAMPOLINE_ADDRESS_OFFSET = CALL_TRAMPOLINE_INSTRUCTIONS * INSTRUCTION_SIZE;
