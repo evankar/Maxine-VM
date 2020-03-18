@@ -26,17 +26,10 @@ import com.sun.cri.ci.*;
 import com.sun.cri.ri.RiRegisterConfig;
 
 public class RISCV64MacroAssembler extends RISCV64Assembler {
-    public static final int RIP_CALL_INSTRUCTION_SIZE = ((2 * CALL_TRAMPOLINE_INSTRUCTIONS) + 1) * INSTRUCTION_SIZE;
+    public static final int RIP_CALL_INSTRUCTION_SIZE = INSTRUCTION_SIZE;
     public static final int CALL_TRAMPOLINE_OFFSET = INSTRUCTION_SIZE;
     public static final int CALL_BRANCH_OFFSET = RIP_CALL_INSTRUCTION_SIZE - INSTRUCTION_SIZE;
     public static final int MOV_OFFSET_IN_TRAMPOLINE = 2 * INSTRUCTION_SIZE;
-    private static final int MOV_32_BIT_CONSTANT_INSTRUCTION_NUMBER = 2;
-
-    public static final int RIP_CALL_INSTRUCTION_SIZE = ((2 * CALL_TRAMPOLINE_INSTRUCTIONS) + 1) * INSTRUCTION_SIZE;
-    public static final int CALL_TRAMPOLINE_OFFSET = INSTRUCTION_SIZE;
-    public static final int CALL_BRANCH_OFFSET = RIP_CALL_INSTRUCTION_SIZE - INSTRUCTION_SIZE;
-    public static final int MOV_OFFSET_IN_TRAMPOLINE = 2 * INSTRUCTION_SIZE;
-
     private static final int MOV_32_BIT_CONSTANT_INSTRUCTION_NUMBER = 2;
 
     /**
