@@ -34,8 +34,6 @@ import com.sun.max.vm.runtime.*;
 import com.sun.max.vm.stack.StackFrameCursor;
 import com.sun.max.vm.stack.StackFrameWalker;
 
-
-import static com.oracle.max.asm.target.aarch64.Aarch64Assembler.INSTRUCTION_SIZE;
 import static com.oracle.max.asm.target.aarch64.Aarch64Assembler.nopHelper;
 import static com.oracle.max.asm.target.riscv64.RISCV64MacroAssembler.*;
 import static com.sun.max.vm.compiler.CallEntryPoint.BASELINE_ENTRY_POINT;
@@ -269,9 +267,6 @@ public final class RISCV64TargetMethodUtil {
             }
         }
     }
-/*
- 
-/*
 
     /**
      * Patches all entry points of a {@linkplain TargetMethod} to the target parameter.
@@ -302,35 +297,9 @@ public final class RISCV64TargetMethodUtil {
                 offset += INSTRUCTION_SIZE;
             } while (offset < OPTIMIZED_ENTRY_POINT.offset());
 
-            code.writeInt(offset, LDR_X16_8);
-            code.writeInt(offset += INSTRUCTION_SIZE, BR_X16);
-            code.writeLong(offset += INSTRUCTION_SIZE, target.toLong());
-            /*
-             * After modifying instructions outside the permissible set the following cache maintenance is required
-             * by the architecture. See B2.2.5 ARM ARM (issue E.a).
-             */
-            MaxineVM.maxine_cache_flush(code.plus(BASELINE_ENTRY_POINT.offset()), offset);
-            if (useSystemMembarrier()) {
-                MaxineVM.syscall_membarrier();
-            }
-        }
-    }*/
-
-    public static void patchWithJump(TargetMethod tm,int pos, CodePointer target) {
-        // We must be at a global safepoint to safely patch TargetMethods
-        FatalError.check(VmOperation.atSafepoint(), "should only be patching entry points when at a safepoint");
-        Pointer code = tm.codeStart().toPointer();
-        int offset = BASELINE_ENTRY_POINT.offset();
-
-        synchronized (PatchingLock) {
-            do {
-                code.writeInt(offset, nopHelper());
-                offset += INSTRUCTION_SIZE;
-            } while (offset < OPTIMIZED_ENTRY_POINT.offset());
-
             code.writeInt(offset, AUIPC_X28_12);
             code.writeInt(offset += INSTRUCTION_SIZE, LW_X28);
-            code.writeInt(offset += INSTRUCTION_SIZE*2, JR_X28);
+            code.writeInt(offset += INSTRUCTION_SIZE, JR_X28);
             code.writeLong(offset += INSTRUCTION_SIZE, target.toLong());
             /*
              * After modifying instructions outside the permissible set the following cache maintenance is required

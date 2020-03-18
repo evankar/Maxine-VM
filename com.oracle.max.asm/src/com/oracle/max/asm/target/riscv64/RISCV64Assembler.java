@@ -1261,8 +1261,6 @@ public class RISCV64Assembler extends AbstractAssembler {
      * 0x0000_0000_0000_0000    ; target address
      * </code>
      */
-
-
     @Override
     public byte[] trampolines(int count) {
         byte[] trampolines = new byte[count * TRAMPOLINE_SIZE];
