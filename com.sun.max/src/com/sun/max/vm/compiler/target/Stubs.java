@@ -872,7 +872,7 @@ public class Stubs {
 
             byte[] code = asm.codeBuffer.close(true);
             final Type type = isInterface ? InterfaceTrampoline : VirtualTrampoline;
-            return new Stub(type, stubName, frameSize, code, callPos, callSize, callee, registerRestoreEpilogueOffset);
+            return new Stub(type, stubName, frameSize, code, callPos, callSize, callee, registerRestoreEpilogueOffset, asm.trampolines(1));
         } else {
             throw FatalError.unimplemented("com.sun.max.vm.compiler.target.Stubs.genDynamicTrampoline");
         }

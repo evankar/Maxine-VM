@@ -123,8 +123,7 @@ public final class RISCV64TargetMethodUtil {
      * @return the absolute target address of the CALL
      */
     public static CodePointer readCall32Target(TargetMethod tm, int callPos) {
-        final CodePointer callSite = tm.codeAt(callPos);
-        return readCall32Target(callSite);
+        return readCall32Target(tm.codeAt(callPos));
     }
 
     /**
@@ -145,12 +144,6 @@ public final class RISCV64TargetMethodUtil {
             return CodePointer.from(target);
         }
         return callSite.plus(offset);
-        /*
-        callSitePointer = callSitePointer.plus(offset);
-
-        int displacement = getDisplacementFromTrampoline(callSitePointer);
-        final CodePointer branchSite = callSite.plus(CALL_BRANCH_OFFSET);
-        return branchSite.plus(displacement); */
     }
 
     /**
@@ -371,7 +364,9 @@ public final class RISCV64TargetMethodUtil {
         int instruction = extractInstruction(code, callOffset);
         assert isJumpInstruction(instruction) : "Not jump";
         boolean isLinked = isJumpLinked(instruction);
-        int newBranch = jumpAndLinkImmediateHelper(RISCV64.zero, displacement);
+        int newBranch;
+        if(isLinked) newBranch = jumpAndLinkImmediateHelper(RISCV64.ra, displacement);
+        else newBranch = jumpAndLinkImmediateHelper(RISCV64.zero, displacement);
         writeInstruction(code, callOffset, newBranch);
         return 0;
     }
