@@ -1290,9 +1290,4 @@ public class RISCV64Assembler extends AbstractAssembler {
         buffer[offset + 2] = (byte) (instruction >> 16 & 0xFF);
         buffer[offset + 3] = (byte) (instruction >> 24 & 0xFF);
     }
-
-
-
-
-
 }
