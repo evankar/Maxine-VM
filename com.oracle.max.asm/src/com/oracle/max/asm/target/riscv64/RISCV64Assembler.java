@@ -31,12 +31,7 @@ import com.sun.cri.ci.*;
 import com.sun.cri.ri.RiRegisterConfig;
 
 public class RISCV64Assembler extends AbstractAssembler {
-    public static final int PLACEHOLDER_INSTRUCTIONS_FOR_LONG_OFFSETS = 15;    
     public static final int INSTRUCTION_SIZE = 4;
-    
-    public static final int CALL_TRAMPOLINE_INSTRUCTIONS = 3;
-    public static final int TRAMPOLINE_SIZE = (CALL_TRAMPOLINE_INSTRUCTIONS * INSTRUCTION_SIZE) + Long.BYTES;
-    public static final int TRAMPOLINE_ADDRESS_OFFSET = CALL_TRAMPOLINE_INSTRUCTIONS * INSTRUCTION_SIZE;
 
     public CiRegister frameRegister;
     public CiRegister scratchRegister;
@@ -1246,6 +1241,16 @@ public class RISCV64Assembler extends AbstractAssembler {
         rtype(LRSC, dest, 0b011, addr, src, imm32);
     }
 
+    /** The number of instructions in a trampoline. */
+    public static final int TRAMPOLINE_INSTRUCTIONS = 3;
+
+    /** The size of a trampoline in bytes. */
+    public static final int TRAMPOLINE_SIZE = (TRAMPOLINE_INSTRUCTIONS * INSTRUCTION_SIZE) + Long.BYTES;
+
+    /** The offset of the address operand in a trampoline. */
+    public static final int TRAMPOLINE_ADDRESS_OFFSET = TRAMPOLINE_INSTRUCTIONS * INSTRUCTION_SIZE;
+
+
     /**
      * An address describing the PC relative offset of the trampoline address in the trampoline
      * itself. That is +12 from the PC. The trampoline has the format:
@@ -1256,8 +1261,6 @@ public class RISCV64Assembler extends AbstractAssembler {
      * 0x0000_0000_0000_0000    ; target address
      * </code>
      */
-
-
     @Override
     public byte[] trampolines(int count) {
         byte[] trampolines = new byte[count * TRAMPOLINE_SIZE];
@@ -1285,9 +1288,4 @@ public class RISCV64Assembler extends AbstractAssembler {
         buffer[offset + 2] = (byte) (instruction >> 16 & 0xFF);
         buffer[offset + 3] = (byte) (instruction >> 24 & 0xFF);
     }
-
-
-
-
-
 }

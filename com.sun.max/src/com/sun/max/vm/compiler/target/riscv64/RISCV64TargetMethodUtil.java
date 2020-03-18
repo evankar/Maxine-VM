@@ -34,9 +34,10 @@ import com.sun.max.vm.runtime.*;
 import com.sun.max.vm.stack.StackFrameCursor;
 import com.sun.max.vm.stack.StackFrameWalker;
 
-
 import static com.oracle.max.asm.target.aarch64.Aarch64Assembler.nopHelper;
 import static com.oracle.max.asm.target.riscv64.RISCV64MacroAssembler.*;
+import static com.sun.max.vm.compiler.CallEntryPoint.BASELINE_ENTRY_POINT;
+import static com.sun.max.vm.compiler.CallEntryPoint.OPTIMIZED_ENTRY_POINT;
 import static com.sun.max.vm.compiler.target.TargetMethod.useSystemMembarrier;
 import static com.sun.max.vm.compiler.target.TargetMethod.useNonMandatedSystemMembarrier;
 
@@ -137,7 +138,14 @@ public final class RISCV64TargetMethodUtil {
         int instruction = callSitePointer.readInt(0);
         assert isJumpInstruction(instruction) : instruction;
         final int offset = jumpAndLinkExtractDisplacement(instruction);
-        assert offset == TRAMPOLINE_SIZE : offset;
+        //assert offset == TRAMPOLINE_SIZE : offset;
+
+        if (isTrampolineSite(callSitePointer.plus(offset))) {
+            long target = callSitePointer.plus(offset).readLong(TRAMPOLINE_ADDRESS_OFFSET);
+            return CodePointer.from(target);
+        }
+        return callSite.plus(offset);
+        /*
         callSitePointer = callSitePointer.plus(offset);
 
         int displacement = getDisplacementFromTrampoline(callSitePointer);
@@ -216,17 +224,17 @@ public final class RISCV64TargetMethodUtil {
      * Returns the address of the target prior to patching.
      * 
      * @param callSite
-     * @param disp32
+     * @param disp20
      * @param fixingUp identifies when fixing up as opposed to patching a concurrently executable call-site.
      * @return
      */
-    private static long maybePatchBranchImmediate(CodePointer callSite, int disp32, boolean fixingUp) {
+    private static long maybePatchBranchImmediate(CodePointer callSite, int disp20, boolean fixingUp) {
         int instruction = callSite.toPointer().readInt(0);
         assert isJumpInstruction(instruction) : instruction;
         int oldDisp = jumpAndLinkExtractDisplacement(instruction);
         boolean isLinked = isJumpLinked(instruction);
-        if (oldDisp != disp32) {
-            patchBranchImmediate(callSite.toPointer(), disp32, isLinked, fixingUp);
+        if (oldDisp != disp20) {
+            patchBranchImmediate(callSite.toPointer(), disp20, isLinked, fixingUp);
         }
         return callSite.plus(oldDisp).toLong();
     }
@@ -260,106 +268,23 @@ public final class RISCV64TargetMethodUtil {
         }
     }
 
-    private static int getDisplacementFromTrampoline(Pointer callSitePointer) {
-        int displacement;
-        if (isAndInstruction(callSitePointer.readInt(8))) {
-            return 0;
-        }
-        return maybePatchTrampolineCall(tm, callSite, target, disp20, fixingUp);
-    }
-
     /**
-     * Patch the address operand of a trampoline call if the current target differs from the new target. Optionally
-     * patch the address of the call site branch to steer execution to the trampoline. Returns the address of
-     * the old target prior to any patching.
-     *
-     * @param tm
-     * @param callSite
-     * @param target
-     * @param disp
-     * @param fixingUp identifies when fixing up as opposed to patching a concurrently executable call-site.
-     * @return
-     */
-    private static long maybePatchTrampolineCall(TargetMethod tm, CodePointer callSite, Pointer target, int disp, boolean fixingUp) {
-        int callOffset = (int) (callSite.toLong() - tm.codeStart().toLong());
-        // locate the trampoline site that corresponds to the call site.
-        int pos = Safepoints.safepointPosForCall(callOffset, INSTRUCTION_SIZE);
-        int spIndex = tm.safepoints().indexOfCallAt(pos);
-        CodePointer trampolineSite = tm.trampolineStart().plus(spIndex * TRAMPOLINE_SIZE);
-        assert isTrampolineSite(trampolineSite.toPointer());
-        long oldTarget = trampolineSite.toPointer().readLong(2 * INSTRUCTION_SIZE);
-
-        if (target.toLong() != oldTarget) {
-            trampolineSite.toPointer().writeLong(TRAMPOLINE_ADDRESS_OFFSET, target.toLong());
-            /*
-             * For concurrent modification and execution a memory barrier here prevents the possibility
-             * of the previous store of the target address being ordered after the call site store (if it
-             * is updated).
-             */
-            if (!fixingUp) {
-                MemoryBarriers.barrier(MemoryBarriers.STORE_LOAD);
-            }
-        }
-
-        long callTarget = maybePatchBranchImmediate(callSite, trampolineSite.minus(callSite).toInt(), fixingUp);
-
-        if (callTarget != trampolineSite.toLong()) {
-            return callTarget;
-        }
-        return oldTarget;
-    }
-
-    private static void patchBranchRegister(Pointer patchSite, int displacement, boolean isLinked, int offset) {
-        final boolean isNegative = displacement < 0;
-        if (isNegative) {
-            displacement = -displacement;
-        }
-        int instruction;
-        int[] mov32BitConstantInstructions = mov32BitConstantHelper(RISCV64.x28, displacement);
-        for (int i = 0; i < mov32BitConstantInstructions.length; i++) {
-            instruction = mov32BitConstantInstructions[i];
-            if (instruction == 0) { // fill in with asm.nop() if mov32BitConstant did not need those instructions
-                instruction = addImmediateHelper(RISCV64.zero, RISCV64.zero, 0);
-            }
-        }
-    }
-/*
- 
-/*
-
-/*
-    private static void writeJump(Pointer patchSite, CodePointer target) {
-        long disp64 = target.toLong() ;//- patchSite.plus(CALL_BRANCH_OFFSET).toLong();
-        int displacement = (int) disp64;
-        assert displacement == disp64;
-        int branchOffset = CALL_BRANCH_OFFSET - CALL_TRAMPOLINE_OFFSET;
-        patchSite.writeInt(CALL_TRAMPOLINE_OFFSET + 4,
-                addImmediateHelper(RISCV64.x29, RISCV64.x29, branchOffset));
-        branchOffset -= (CALL_TRAMPOLINE_INSTRUCTIONS - 1) * INSTRUCTION_SIZE;
-        patchSite.writeInt(CALL_TRAMPOLINE_OFFSET + (CALL_TRAMPOLINE_INSTRUCTIONS - 1) * INSTRUCTION_SIZE,
-                jumpAndLinkImmediateHelper(RISCV64.zero, branchOffset));
-        // Don't move this call higher since it flushes the cache
-        patchBranchRegister(patchSite, displacement, false, CALL_TRAMPOLINE_OFFSET);
-    }
-
-    /**
-     * Patches a position in a target method with a direct jump to a given target address.
+     * Patches all entry points of a {@linkplain TargetMethod} to the target parameter.
+     * Only called during deoptimization and also at a safepoint
+     * to direct execution from an invalidated method (the one being patched here) to a stub. The stub will
+     * complete deoptimization and the invalidated method will eventually be discarded. We can therefore
+     * use the simplest patching scheme and since we are on the slow path an optimised version is not necessary.
+     * 
+     * This function pairs with {@linkplain #isJumpTo} called to validate the target patched here. The prologue is
+     * patched with <code>nop</instructions> from the baseline entry point to the optimised entry point (2 or 3
+     * instructions depending on the prologue), and the optimised entry point is patched with the jump. 
+     * 
+     * Patching this way avoids overlapping two long range calls patches (4 * 4 bytes each) and is simpler than patching
+     * the trampolines.
      *
      * @param tm the target method to be patched
-     * @param pos the position in {@code tm} at which to apply the patch
      * @param target the target of the jump instruction being patched in
      */
-    /*public static void patchWithJump(TargetMethod tm, int pos, CodePointer target) {
-        // We must be at a global safepoint to safely patch TargetMethods
-        FatalError.check(VmOperation.atSafepoint(), "should only be patching entry points when at a safepoint");
-
-        final Pointer patchSite = tm.codeAt(pos).toPointer();
-
-        synchronized (PatchingLock) {
-            writeJump(patchSite, target);
-        }
-    }*/
-
     public static void patchWithJump(TargetMethod tm, CodePointer target) {
         // We must be at a global safepoint to safely patch TargetMethods
         FatalError.check(VmOperation.atSafepoint(), "should only be patching entry points when at a safepoint");
@@ -389,7 +314,8 @@ public final class RISCV64TargetMethodUtil {
 
     /**
      * Indicate with the instruction in a target method at a given position is a jump to a specified destination. Used
-     * in particular for testing if the entry points of a target method were patched to jump to a trampoline.
+     * in particular for testing if the entry points of a target method were patched to jump to a trampoline, and also
+     * to validate itable/vtable entries.
      *
      * @param tm a target method
      * @param pos byte index relative to the start of the method to a call site
@@ -397,10 +323,18 @@ public final class RISCV64TargetMethodUtil {
      * @return {@code true} if the instruction is a jump to the target, false otherwise
      */
     public static boolean isJumpTo(TargetMethod tm, int pos, CodePointer jumpTarget) {
-        if (!isJumpInstruction(tm.codeAt(pos).toPointer().readInt(0))) {
-            return false;
+        Pointer code = tm.codeAt(pos).toPointer();
+        /* Look first for a regular call site. */
+        if (isRIPCall(code)) {
+            CodePointer target = readCall32Target(tm.codeAt(pos));
+            return jumpTarget.equals(target);
         }
-        return readCall32Target(tm, pos).equals(jumpTarget);
+        /* And secondly for an indirect call that may have been patched e.g. to a deopt stub. */
+        if (isIndirectCallSite(code)) {
+            long target = code.readLong(TRAMPOLINE_ADDRESS_OFFSET);
+            return target == jumpTarget.toLong();
+        }
+        return false;
     }
 
     /**
@@ -485,7 +419,6 @@ public final class RISCV64TargetMethodUtil {
         TargetMethod tm = current.targetMethod();
         CodePointer entryPoint = tm.callEntryPoint.equals(CallEntryPoint.C_ENTRY_POINT) ? CallEntryPoint.C_ENTRY_POINT.in(tm) : CallEntryPoint.OPTIMIZED_ENTRY_POINT.in(tm);
         return entryPoint.equals(current.vmIP()) || current.stackFrameWalker().readInt(current.vmIP().toAddress(), 0) == RET;
-
     }
 
     /**
