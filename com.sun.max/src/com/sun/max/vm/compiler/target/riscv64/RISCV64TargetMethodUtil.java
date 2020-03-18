@@ -34,8 +34,12 @@ import com.sun.max.vm.runtime.*;
 import com.sun.max.vm.stack.StackFrameCursor;
 import com.sun.max.vm.stack.StackFrameWalker;
 
-import static com.oracle.max.asm.target.aarch64.Aarch64Assembler.TRAMPOLINE_ADDRESS_OFFSET;
+
+import static com.oracle.max.asm.target.aarch64.Aarch64Assembler.INSTRUCTION_SIZE;
+import static com.oracle.max.asm.target.aarch64.Aarch64Assembler.nopHelper;
 import static com.oracle.max.asm.target.riscv64.RISCV64MacroAssembler.*;
+import static com.sun.max.vm.compiler.CallEntryPoint.BASELINE_ENTRY_POINT;
+import static com.sun.max.vm.compiler.CallEntryPoint.OPTIMIZED_ENTRY_POINT;
 import static com.sun.max.vm.compiler.target.TargetMethod.useSystemMembarrier;
 import static com.sun.max.vm.compiler.target.TargetMethod.useNonMandatedSystemMembarrier;
 
@@ -139,7 +143,7 @@ public final class RISCV64TargetMethodUtil {
         //assert offset == TRAMPOLINE_SIZE : offset;
 
         if (isTrampolineSite(callSitePointer.plus(offset))) {
-            long target = callSitePointer.plus(offset).readLong(RISC_TRAMPOLINE_ADDRESS_OFFSET);
+            long target = callSitePointer.plus(offset).readLong(TRAMPOLINE_ADDRESS_OFFSET);
             return CodePointer.from(target);
         }
         return callSite.plus(offset);
@@ -265,59 +269,20 @@ public final class RISCV64TargetMethodUtil {
             }
         }
     }
+/*
+ 
+/*
 
-    private static int getDisplacementFromTrampoline(Pointer callSitePointer) {
-        int displacement;
-        if (isAndInstruction(callSitePointer.readInt(8))) {
-            return 0;
-        }
-        int luiImm = RISCV64MacroAssembler.extractLuiImmediate(callSitePointer.readInt(8));
-        int addiImm = RISCV64MacroAssembler.extractAddiImmediate(callSitePointer.readInt(12));
-        if ((addiImm & 0xFFF) >>> 11 == 0b1) {
-            addiImm = addiImm | 0xFFFFF000;
-        }
-        displacement = (luiImm << 12) + addiImm;
-        int addSubInstruction = callSitePointer.readInt(16);
-        if (!isAddInstruction(addSubInstruction)) {
-            displacement = -displacement;
-        }
-        return displacement;
-    }
-
-    private static void patchBranchRegister(Pointer patchSite, int displacement, boolean isLinked, int offset) {
-        final boolean isNegative = displacement < 0;
-        if (isNegative) {
-            displacement = -displacement;
-        }
-        int instruction;
-        int[] mov32BitConstantInstructions = mov32BitConstantHelper(RISCV64.x28, displacement);
-        for (int i = 0; i < mov32BitConstantInstructions.length; i++) {
-            instruction = mov32BitConstantInstructions[i];
-            if (instruction == 0) { // fill in with asm.nop() if mov32BitConstant did not need those instructions
-                instruction = addImmediateHelper(RISCV64.zero, RISCV64.zero, 0);
-            }
-            patchSite.writeInt(offset + MOV_OFFSET_IN_TRAMPOLINE + i * INSTRUCTION_SIZE, instruction);
-        }
-        instruction = addSubInstructionHelper(RISCV64.x28, RISCV64.x29, RISCV64.x28, isNegative);
-        patchSite.writeInt(offset + MOV_OFFSET_IN_TRAMPOLINE + mov32BitConstantInstructions.length * INSTRUCTION_SIZE, instruction);
-        instruction = jumpAndLinkHelper(isLinked ? RISCV64.ra : RISCV64.x0, RISCV64.x28, 0);
-        patchSite.writeInt(CALL_BRANCH_OFFSET, instruction);
-        // Patch the JAL to jump to the new trampoline
-        instruction = jumpAndLinkImmediateHelper(RISCV64.zero, offset);
-        patchSite.writeInt(0, instruction);
-
-        MaxineVM.maxine_cache_flush(patchSite, RIP_CALL_INSTRUCTION_SIZE);
-    }
-
+/*
     private static void writeJump(Pointer patchSite, CodePointer target) {
-        long disp64 = target.toLong() - patchSite.plus(CALL_BRANCH_OFFSET).toLong();
+        long disp64 = target.toLong() ;//- patchSite.plus(CALL_BRANCH_OFFSET).toLong();
         int displacement = (int) disp64;
         assert displacement == disp64;
         int branchOffset = CALL_BRANCH_OFFSET - CALL_TRAMPOLINE_OFFSET;
         patchSite.writeInt(CALL_TRAMPOLINE_OFFSET + 4,
                 addImmediateHelper(RISCV64.x29, RISCV64.x29, branchOffset));
-        branchOffset -= (CALL_TRAMPOLINE_INSTRUCTIONS - 1) * INSTRUCTION_SIZE;
-        patchSite.writeInt(CALL_TRAMPOLINE_OFFSET + (CALL_TRAMPOLINE_INSTRUCTIONS - 1) * INSTRUCTION_SIZE,
+        branchOffset -= (TRAMPOLINE_INSTRUCTIONS - 1) * INSTRUCTION_SIZE;
+        patchSite.writeInt(TRAMPOLINE_ADDRESS_OFFSET,
                 jumpAndLinkImmediateHelper(RISCV64.zero, branchOffset));
         // Don't move this call higher since it flushes the cache
         patchBranchRegister(patchSite, displacement, false, CALL_TRAMPOLINE_OFFSET);
@@ -330,7 +295,7 @@ public final class RISCV64TargetMethodUtil {
      * @param pos the position in {@code tm} at which to apply the patch
      * @param target the target of the jump instruction being patched in
      */
-    public static void patchWithJump(TargetMethod tm, int pos, CodePointer target) {
+    /*public static void patchWithJump(TargetMethod tm, int pos, CodePointer target) {
         // We must be at a global safepoint to safely patch TargetMethods
         FatalError.check(VmOperation.atSafepoint(), "should only be patching entry points when at a safepoint");
 
@@ -338,6 +303,33 @@ public final class RISCV64TargetMethodUtil {
 
         synchronized (PatchingLock) {
             writeJump(patchSite, target);
+        }
+    }*/
+
+    public static void patchWithJump(TargetMethod tm,int pos, CodePointer target) {
+        // We must be at a global safepoint to safely patch TargetMethods
+        FatalError.check(VmOperation.atSafepoint(), "should only be patching entry points when at a safepoint");
+        Pointer code = tm.codeStart().toPointer();
+        int offset = BASELINE_ENTRY_POINT.offset();
+
+        synchronized (PatchingLock) {
+            do {
+                code.writeInt(offset, nopHelper());
+                offset += INSTRUCTION_SIZE;
+            } while (offset < OPTIMIZED_ENTRY_POINT.offset());
+
+            code.writeInt(offset, AUIPC_X28_12);
+            code.writeInt(offset += INSTRUCTION_SIZE, LW_X28);
+            code.writeInt(offset += INSTRUCTION_SIZE*2, JR_X28);
+            code.writeLong(offset += INSTRUCTION_SIZE, target.toLong());
+            /*
+             * After modifying instructions outside the permissible set the following cache maintenance is required
+             * by the architecture. See B2.2.5 ARM ARM (issue E.a).
+             */
+            MaxineVM.maxine_cache_flush(code.plus(BASELINE_ENTRY_POINT.offset()), offset);
+            if (useSystemMembarrier()) {
+                MaxineVM.syscall_membarrier();
+            }
         }
     }
 
