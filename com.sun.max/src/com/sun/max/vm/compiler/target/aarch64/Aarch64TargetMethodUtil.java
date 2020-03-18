@@ -471,12 +471,4 @@ public final class Aarch64TargetMethodUtil {
         Pointer sp = frame.sp();
         return sp.plus(tm.frameSize());
     }
-<<<<<<< HEAD
-<<<<<<< HEAD
 }
-=======
-}
->>>>>>> d10c5f3b65ea9a95f4e6e1ce35376c6f889b96e0
-=======
-}
->>>>>>> a92065406b1e64bcfec487cd37f501de9bcdcf78
