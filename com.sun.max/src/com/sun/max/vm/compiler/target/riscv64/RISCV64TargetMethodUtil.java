@@ -35,7 +35,6 @@ import com.sun.max.vm.stack.StackFrameCursor;
 import com.sun.max.vm.stack.StackFrameWalker;
 
 
-import static com.oracle.max.asm.target.aarch64.Aarch64Assembler.INSTRUCTION_SIZE;
 import static com.oracle.max.asm.target.aarch64.Aarch64Assembler.nopHelper;
 import static com.oracle.max.asm.target.riscv64.RISCV64MacroAssembler.*;
 import static com.sun.max.vm.compiler.target.TargetMethod.useSystemMembarrier;
@@ -361,7 +360,7 @@ public final class RISCV64TargetMethodUtil {
         }
     }*/
 
-    public static void patchWithJump(TargetMethod tm,int pos, CodePointer target) {
+    public static void patchWithJump(TargetMethod tm, CodePointer target) {
         // We must be at a global safepoint to safely patch TargetMethods
         FatalError.check(VmOperation.atSafepoint(), "should only be patching entry points when at a safepoint");
         Pointer code = tm.codeStart().toPointer();
@@ -375,7 +374,7 @@ public final class RISCV64TargetMethodUtil {
 
             code.writeInt(offset, AUIPC_X28_12);
             code.writeInt(offset += INSTRUCTION_SIZE, LW_X28);
-            code.writeInt(offset += INSTRUCTION_SIZE*2, JR_X28);
+            code.writeInt(offset += INSTRUCTION_SIZE, JR_X28);
             code.writeLong(offset += INSTRUCTION_SIZE, target.toLong());
             /*
              * After modifying instructions outside the permissible set the following cache maintenance is required
