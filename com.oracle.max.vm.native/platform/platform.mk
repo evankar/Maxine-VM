@@ -65,7 +65,7 @@ ifeq ($(TARGETOS),Darwin)
     HOSTISA := $(shell uname -p)
 endif # Darwin
 ifeq ($(TARGETOS),Linux)
-    HOSTISA := $(shell uname -m)
+    TARGETISA ?= $(shell uname -m)
 endif # Linux
 ifeq ($(TARGETOS),SunOS)
     HOSTISA := $(shell isainfo -n)
@@ -257,7 +257,8 @@ endif
 ifeq ($(OS),linux)
     ifneq "$(findstring def, $(origin CC))" ""
         # origin of CC is either undefined or default, so set it here
-        CC = gcc
+        # CC = gcc
+        CC = riscv64-linux-gnu-gcc
     endif
     ifneq "$(findstring def, $(origin CFLAGS))" ""
         # origin of CFLAGS is either undefined or default, so set it here
