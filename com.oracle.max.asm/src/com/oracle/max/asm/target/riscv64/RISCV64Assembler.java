@@ -1250,7 +1250,6 @@ public class RISCV64Assembler extends AbstractAssembler {
     /** The offset of the address operand in a trampoline. */
     public static final int TRAMPOLINE_ADDRESS_OFFSET = TRAMPOLINE_INSTRUCTIONS * INSTRUCTION_SIZE;
 
-
     /**
      * An address describing the PC relative offset of the trampoline address in the trampoline
      * itself. That is +12 from the PC. The trampoline has the format:

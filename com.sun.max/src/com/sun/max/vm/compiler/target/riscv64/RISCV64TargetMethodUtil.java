@@ -137,8 +137,6 @@ public final class RISCV64TargetMethodUtil {
         int instruction = callSitePointer.readInt(0);
         assert isJumpInstruction(instruction) : instruction;
         final int offset = jumpAndLinkExtractDisplacement(instruction);
-        //assert offset == TRAMPOLINE_SIZE : offset;
-
         if (isTrampolineSite(callSitePointer.plus(offset))) {
             long target = callSitePointer.plus(offset).readLong(TRAMPOLINE_ADDRESS_OFFSET);
             return CodePointer.from(target);
