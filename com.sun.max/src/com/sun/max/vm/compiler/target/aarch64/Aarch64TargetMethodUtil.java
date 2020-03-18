@@ -282,7 +282,6 @@ public final class Aarch64TargetMethodUtil {
      * the trampolines.
      *
      * @param tm the target method to be patched
-     * @param pos the position in {@code tm} at which to apply the patch
      * @param target the target of the jump instruction being patched in
      */
     public static void patchWithJump(TargetMethod tm, CodePointer target) {
