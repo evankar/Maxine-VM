@@ -26,10 +26,6 @@ import static com.sun.max.vm.classfile.ErrorContext.*;
 import static com.sun.max.vm.compiler.target.Safepoints.*;
 import static com.sun.max.vm.stack.JVMSFrameLayout.*;
 
-import com.oracle.max.asm.target.aarch64.Aarch64;
-import com.oracle.max.asm.target.aarch64.Aarch64Address;
-import com.oracle.max.asm.target.aarch64.Aarch64Assembler;
-import com.oracle.max.asm.target.aarch64.Aarch64MacroAssembler;
 import com.oracle.max.asm.target.riscv64.RISCV64MacroAssembler.ConditionFlag;
 import com.oracle.max.asm.target.riscv64.*;
 import com.oracle.max.vm.ext.maxri.*;
@@ -913,7 +909,7 @@ public class RISCV64T1XCompilation extends T1XCompilation {
         }
         this.trampolines = asm.trampolines(calls);
     }
-/*
+
     @HOSTED_ONLY
     public static int[] findDataPatchPosns(MaxTargetMethod source, int dispFromCodeStart) {
         int[] result = {};
@@ -957,29 +953,7 @@ public class RISCV64T1XCompilation extends T1XCompilation {
         }
         return result;
     }
-*/
 
-    @HOSTED_ONLY
-    public static int[] findDataPatchPosns(MaxTargetMethod source, int dispFromCodeStart) {
-        int[] result = {};
-        for (int pos = 0; pos < source.codeLength(); pos++) {
-            for (CiRegister reg : Aarch64.cpuRegisters) {
-                RISCV64MacroAssembler asm = new RISCV64MacroAssembler(target(), null);
-                asm.auipc(scratch, 0);
-                asm.addi(scratch, scratch, dispFromCodeStart - pos);
-                asm.nop(RISCV64MacroAssembler.PLACEHOLDER_INSTRUCTIONS_FOR_LONG_OFFSETS - 1);
-                asm.ldru(64, reg, RISCV64Address.createBaseRegisterOnlyAddress(scratch));
-                // pattern must be compatible with Aarch64InstructionDecoder.patchRelativeInstruction
-                byte[] pattern = asm.codeBuffer.close(true);
-                byte[] instr = Arrays.copyOfRange(source.code(), pos, pos + pattern.length);
-                if (Arrays.equals(pattern, instr)) {
-                    result = Arrays.copyOf(result, result.length + 1);
-                    result[result.length - 1] = pos;
-                }
-            }
-        }
-        return result;
-    }
 
     /**
      * Same variables are declared in RISCV64MacroAssembler. However the values here are incremented by one because

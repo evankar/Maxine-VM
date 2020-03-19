@@ -21,6 +21,7 @@ package com.oracle.max.asm.target.riscv64;
 
 import static com.oracle.max.asm.target.aarch64.Aarch64Assembler.InstructionType.General64;
 import static com.oracle.max.asm.target.riscv64.RISCV64.*;
+import static com.oracle.max.asm.target.riscv64.RISCV64MacroAssembler.jumpAndLinkHelper;
 import static com.oracle.max.asm.target.riscv64.RISCV64opCodes.*;
 
 import com.oracle.max.asm.*;
@@ -1250,13 +1251,31 @@ public class RISCV64Assembler extends AbstractAssembler {
     /** The offset of the address operand in a trampoline. */
     public static final int TRAMPOLINE_ADDRESS_OFFSET = TRAMPOLINE_INSTRUCTIONS * INSTRUCTION_SIZE;
 
+    /**
+     * Encode a load instruction for a trampoline.
+     * @return
+     */
+    /*
+    private int trampolineLdr() {
+        return loadStoreInstructionHelper(scratchRegister, trampolineOffset, General64, Aarch64Assembler.Instruction.LDR, 3);
+    }
+
+    /**
+     * Encode a branch instruction for a trampoline.
+     * @return
+     */
+
+    private int trampolineJump() {
+        return jumpAndLinkHelper(x0, x28, 0);
+    }
+
 
     /**
      * An address describing the PC relative offset of the trampoline address in the trampoline
      * itself. That is +12 from the PC. The trampoline has the format:
      * <code>
-     * auipc x28 12     ;adding 12 bytes to pc
-     * lw x28 x28 0     ;loading target on x28 scratch register
+     * auipc x28  ; load pc to x28
+     * ld x28 x28 12     ;loading target on x28 scratch register
      * jalr x0 x28 0    ;jump to target
      * 0x0000_0000_0000_0000    ; target address
      * </code>
