@@ -52,12 +52,12 @@ public final class RISCV64TargetMethodUtil {
 
     /**
      * Instruction encodings for call trampolines.
-     * auipc x28, #12
+     * auipc x28, #0
      */
-    private static final int AUIPC_X28_12 = 0xce17;
+    private static final int AUIPC_X28 = 0xe17;
 
-    /** lw x28, 0(x28) */
-    private static final int LW_X28 = 0xe0e03;
+    /** lw x28, 12(x28) */
+    private static final int LD_X28_12 = 0xce3e03;
 
     /** jr x28 */
     private static final int JR_X28 = 0xe0067;
@@ -100,7 +100,9 @@ public final class RISCV64TargetMethodUtil {
      * @return
      */
     private static boolean isTrampolineSite(Pointer p) {
-        if (AUIPC_X28_12 == p.readInt(0) && LW_X28 == p.readInt(INSTRUCTION_SIZE) && JR_X28 == p.readInt(2 * INSTRUCTION_SIZE)) {
+        if (AUIPC_X28 == p.readInt(0) &&
+            LD_X28_12 == p.readInt(INSTRUCTION_SIZE) &&
+            JR_X28 == p.readInt(2 * INSTRUCTION_SIZE)) {
             return true;
         }
         return false;
@@ -288,8 +290,8 @@ public final class RISCV64TargetMethodUtil {
                 offset += INSTRUCTION_SIZE;
             } while (offset < OPTIMIZED_ENTRY_POINT.offset());
 
-            code.writeInt(offset, AUIPC_X28_12);
-            code.writeInt(offset += INSTRUCTION_SIZE, LW_X28);
+            code.writeInt(offset, AUIPC_X28);
+            code.writeInt(offset += INSTRUCTION_SIZE, LD_X28_12);
             code.writeInt(offset += INSTRUCTION_SIZE, JR_X28);
             code.writeLong(offset += INSTRUCTION_SIZE, target.toLong());
             /*

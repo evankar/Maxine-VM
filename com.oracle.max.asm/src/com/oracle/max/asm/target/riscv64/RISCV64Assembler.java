@@ -22,6 +22,9 @@ package com.oracle.max.asm.target.riscv64;
 import static com.oracle.max.asm.target.aarch64.Aarch64Assembler.InstructionType.General64;
 import static com.oracle.max.asm.target.riscv64.RISCV64.*;
 import static com.oracle.max.asm.target.riscv64.RISCV64opCodes.*;
+import static com.oracle.max.asm.target.riscv64.RISCV64MacroAssembler.addUpperImmediatePCHelper;
+import static com.oracle.max.asm.target.riscv64.RISCV64MacroAssembler.ldHelper;
+import static com.oracle.max.asm.target.riscv64.RISCV64MacroAssembler.jumpAndLinkHelper;
 
 import com.oracle.max.asm.*;
 import com.oracle.max.asm.target.aarch64.Aarch64;
@@ -1242,7 +1245,7 @@ public class RISCV64Assembler extends AbstractAssembler {
     }
 
     /** The number of instructions in a trampoline. */
-    public static final int TRAMPOLINE_INSTRUCTIONS = 3;
+    public static final int TRAMPOLINE_INSTRUCTIONS = 4;
 
     /** The size of a trampoline in bytes. */
     public static final int TRAMPOLINE_SIZE = (TRAMPOLINE_INSTRUCTIONS * INSTRUCTION_SIZE) + Long.BYTES;
@@ -1254,22 +1257,32 @@ public class RISCV64Assembler extends AbstractAssembler {
      * An address describing the PC relative offset of the trampoline address in the trampoline
      * itself. That is +12 from the PC. The trampoline has the format:
      * <code>
-     * auipc x28 12     ;adding 12 bytes to pc
-     * lw x28 x28 0     ;loading target on x28 scratch register
-     * jalr x0 x28 0    ;jump to target
+     * auipc x28 0              ; load pc on x28 (scratch register)
+     * ld x28 x28 12            ; loading target on x28
+     * jalr x0 x28 0            ; jump to target
      * 0x0000_0000_0000_0000    ; target address
      * </code>
      */
+
+    private int trampolineAuipc() {
+        return addUpperImmediatePCHelper(scratchRegister, 0);
+    }
+
+    private int trampolineLd() {
+        return ldHelper(scratchRegister, scratchRegister, 12);
+    }
+
+    private int trampolineJalr() {
+        return jumpAndLinkHelper(RISCV64.zero, scratchRegister, 0);
+    }
+
     @Override
     public byte[] trampolines(int count) {
         byte[] trampolines = new byte[count * TRAMPOLINE_SIZE];
         for (int i = 0; i < trampolines.length; i += TRAMPOLINE_SIZE) {
-            //auipc(x28,RISC_TRAMPOLINE_ADDRESS_OFFSET);
-            writeInt(0xce17, trampolines, i);
-            //lw(x28,x28,0);
-            writeInt(0xe0e03, trampolines, i + INSTRUCTION_SIZE);
-            //jalr(x0,x28,0);
-            writeInt(0xe0067, trampolines, i + INSTRUCTION_SIZE +INSTRUCTION_SIZE);
+            writeInt(trampolineAuipc(), trampolines, i);
+            writeInt(trampolineLd(), trampolines, i + INSTRUCTION_SIZE);
+            writeInt(trampolineJalr(), trampolines, i + 2*INSTRUCTION_SIZE);
         }
         return trampolines;
     }

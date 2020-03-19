@@ -315,6 +315,10 @@ public class RISCV64MacroAssembler extends RISCV64Assembler {
         return instructions;
     }
 
+    public static int addUpperImmediatePCHelper(CiRegister dst, int imm32) {
+        return AUIPC.getValue() | dst.number << 7 | (imm32 & 0xFFFFF000);
+    }
+
     public static int shiftLeftLogicImmediateHelper(CiRegister dst, CiRegister rs, int imm32) {
         return COMP.getValue() | dst.number << 7 | 1 << 12 | rs.number << 15 | imm32 << 20;
     }
