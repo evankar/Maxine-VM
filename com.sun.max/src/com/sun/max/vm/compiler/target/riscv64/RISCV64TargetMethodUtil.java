@@ -189,7 +189,7 @@ public final class RISCV64TargetMethodUtil {
         int spIndex = tm.safepoints().indexOfCallAt(pos);
         CodePointer trampolineSite = tm.trampolineStart().plus(spIndex * TRAMPOLINE_SIZE);
         assert isTrampolineSite(trampolineSite.toPointer());
-        long oldTarget = trampolineSite.toPointer().readLong(2 * INSTRUCTION_SIZE);
+        long oldTarget = trampolineSite.toPointer().readLong(TRAMPOLINE_ADDRESS_OFFSET);
 
         if (target.toLong() != oldTarget) {
             trampolineSite.toPointer().writeLong(TRAMPOLINE_ADDRESS_OFFSET, target.toLong());
