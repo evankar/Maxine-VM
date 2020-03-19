@@ -187,12 +187,12 @@ public final class RISCV64TargetMethodUtil {
         // locate the trampoline site that corresponds to the call site.
         int pos = Safepoints.safepointPosForCall(callOffset, INSTRUCTION_SIZE);
         int spIndex = tm.safepoints().indexOfCallAt(pos);
-        CodePointer trampolineSite = tm.trampolineStart().plus(spIndex * TRAMPOLINE_SIZE);
-        assert isTrampolineSite(trampolineSite.toPointer());
-        long oldTarget = trampolineSite.toPointer().readLong(TRAMPOLINE_ADDRESS_OFFSET);
+        Pointer trampolineSite = tm.trampolineStart().plus(spIndex * TRAMPOLINE_SIZE).toPointer();
+        assert isTrampolineSite(trampolineSite);
+        long oldTarget = trampolineSite.readLong(TRAMPOLINE_ADDRESS_OFFSET);
 
         if (target.toLong() != oldTarget) {
-            trampolineSite.toPointer().writeLong(TRAMPOLINE_ADDRESS_OFFSET, target.toLong());
+            trampolineSite.writeLong(TRAMPOLINE_ADDRESS_OFFSET, target.toLong());
             /*
              * For concurrent modification and execution a memory barrier here prevents the possibility
              * of the previous store of the target address being ordered after the call site store (if it
@@ -203,7 +203,7 @@ public final class RISCV64TargetMethodUtil {
             }
         }
 
-        long callTarget = maybePatchBranchImmediate(callSite, trampolineSite.minus(callSite).toInt(), fixingUp);
+        long callTarget = maybePatchBranchImmediate(callSite, trampolineSite.minus(callSite.toPointer()).toInt(), fixingUp);
 
         if (callTarget != trampolineSite.toLong()) {
             return callTarget;
