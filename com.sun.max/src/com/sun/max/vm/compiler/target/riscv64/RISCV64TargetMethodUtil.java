@@ -23,7 +23,7 @@ package com.sun.max.vm.compiler.target.riscv64;
 import com.oracle.max.asm.NumUtil;
 import com.oracle.max.cri.intrinsics.MemoryBarriers;
 import com.oracle.max.asm.target.riscv64.*;
-import com.sun.cri.ci.CiCalleeSaveLayout;
+import com.sun.cri.ci.*;
 import com.sun.max.annotate.HOSTED_ONLY;
 import com.sun.max.platform.Platform;
 import com.sun.max.unsafe.*;
@@ -363,10 +363,13 @@ public final class RISCV64TargetMethodUtil {
     public static int fixupCall19Site(byte [] code, int callOffset, int displacement) {
         int instruction = extractInstruction(code, callOffset);
         assert isJumpInstruction(instruction) : "Not jump";
-        boolean isLinked = isJumpLinked(instruction);
-        int newBranch;
-        if(isLinked) newBranch = jumpAndLinkImmediateHelper(RISCV64.ra, displacement);
-        else newBranch = jumpAndLinkImmediateHelper(RISCV64.zero, displacement);
+        CiRegister retRegister;
+        if(isJumpLinked(instruction)) {
+            retRegister = RISCV64.ra;
+        } else {
+            retRegister = RISCV64.zero;
+        }
+        int newBranch = jumpAndLinkImmediateHelper(retRegister, displacement);
         writeInstruction(code, callOffset, newBranch);
         return 0;
     }
