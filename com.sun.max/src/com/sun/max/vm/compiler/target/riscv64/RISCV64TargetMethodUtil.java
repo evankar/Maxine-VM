@@ -218,7 +218,8 @@ public final class RISCV64TargetMethodUtil {
      * @return
      */
     private static void patchBranchImmediate(Pointer callSite, int displacement, boolean isLinked, boolean fixingUp) {
-        int instruction = jumpAndLinkImmediateHelper(RISCV64.zero, displacement);
+        CiRegister linkRegister = isLinked ? RISCV64.ra : RISCV64.zero;
+        int instruction = jumpAndLinkImmediateHelper(linkRegister, displacement);
         callSite.writeInt(0, instruction);
         /*
          * Although no explicit synchronisation is mandated by the architecture when patching b -> b, doing
