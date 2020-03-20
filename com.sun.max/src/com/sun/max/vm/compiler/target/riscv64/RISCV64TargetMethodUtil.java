@@ -54,13 +54,13 @@ public final class RISCV64TargetMethodUtil {
      * Instruction encodings for call trampolines.
      * auipc x28, #0
      */
-    private static final int AUIPC_X28 = 0xe17;
+    private static final int AUIPC_X28 = addUpperImmediatePCHelper(RISCV64.x28, 0);
 
     /** lw x28, 12(x28) */
-    private static final int LD_X28_12 = 0xce3e03;
+    private static final int LD_X28_12 = ldHelper(RISCV64.x28, RISCV64.x28, 12);
 
     /** jr x28 */
-    private static final int JR_X28 = 0xe0067;
+    private static final int JR_X28 = jumpAndLinkHelper(RISCV64.zero, RISCV64.x28, 0);
 
     /**
      * The limits of an unconditional branch encoded as a 20-bit signed number.
@@ -106,15 +106,6 @@ public final class RISCV64TargetMethodUtil {
             return true;
         }
         return false;
-    }
-
-    /**
-     * Indicate if the code at the address of the pointer parameter is an indirect call.
-     * @param p
-     * @return
-     */
-    private static boolean isIndirectCallSite(Pointer p) {
-        return isTrampolineSite(p);
     }
 
     /**
@@ -317,15 +308,9 @@ public final class RISCV64TargetMethodUtil {
      */
     public static boolean isJumpTo(TargetMethod tm, int pos, CodePointer jumpTarget) {
         Pointer code = tm.codeAt(pos).toPointer();
-        /* Look first for a regular call site. */
         if (isRIPCall(code)) {
             CodePointer target = readCall32Target(tm.codeAt(pos));
             return jumpTarget.equals(target);
-        }
-        /* And secondly for an indirect call that may have been patched e.g. to a deopt stub. */
-        if (isIndirectCallSite(code)) {
-            long target = code.readLong(TRAMPOLINE_ADDRESS_OFFSET);
-            return target == jumpTarget.toLong();
         }
         return false;
     }
@@ -463,8 +448,7 @@ public final class RISCV64TargetMethodUtil {
 
     public static boolean isRIPCall(Pointer callIP) {
         int instruction = callIP.readInt(0);
-        return isJumpInstruction(instruction)
-                && (jumpAndLinkExtractDisplacement(instruction) == CALL_TRAMPOLINE_OFFSET);
+        return isJumpInstruction(instruction);
     }
 
     public static Pointer returnAddressPointer(StackFrameCursor frame) {
