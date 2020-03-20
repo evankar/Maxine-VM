@@ -63,24 +63,6 @@ public final class RISCV64TargetMethodUtil {
     private static final int JR_X28 = jumpAndLinkHelper(RISCV64.zero, RISCV64.x28, 0);
 
     /**
-     * The limits of an unconditional branch encoded as a 20-bit signed number.
-     */
-    public static final int MAX_BRANCH = (1 << 19) - 1;
-    public static final int MIN_BRANCH = -(1 << 19);
-
-    /**
-     * Test whether displacement is within range of a branch immediate instruction.
-     * @param displacement
-     * @return
-     */
-    private static boolean inBranchRange(int displacement) {
-        if (displacement > MAX_BRANCH || displacement < MIN_BRANCH) {
-            return false;
-        }
-        return true;
-    }
-
-    /**
      * Extract an instruction from the code array which starts at index=idx.
      * @param code
      * @param idx
@@ -155,7 +137,7 @@ public final class RISCV64TargetMethodUtil {
     private static long patchCallSite(TargetMethod tm, CodePointer callSite, Pointer target, boolean fixingUp) {
         long disp = target.toLong() - callSite.toLong();
         int disp20 = (int) disp;
-        if (inBranchRange(disp20)) {
+        if (is20BitArithmeticImmediate(disp20)) {
             return maybePatchBranchImmediate(callSite, disp20, fixingUp);
         }
         return maybePatchTrampolineCall(tm, callSite, target, disp20, fixingUp);
@@ -213,6 +195,7 @@ public final class RISCV64TargetMethodUtil {
      * @return
      */
     private static long maybePatchBranchImmediate(CodePointer callSite, int disp20, boolean fixingUp) {
+        assert is20BitArithmeticImmediate(disp20);
         int instruction = callSite.toPointer().readInt(0);
         assert isJumpInstruction(instruction) : instruction;
         int oldDisp = jumpAndLinkExtractDisplacement(instruction);
