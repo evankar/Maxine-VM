@@ -1245,7 +1245,7 @@ public class RISCV64Assembler extends AbstractAssembler {
     }
 
     /** The number of instructions in a trampoline. */
-    public static final int TRAMPOLINE_INSTRUCTIONS = 3;
+    private static final int TRAMPOLINE_INSTRUCTIONS = 3;
 
     /** The size of a trampoline in bytes. */
     public static final int TRAMPOLINE_SIZE = (TRAMPOLINE_INSTRUCTIONS * INSTRUCTION_SIZE) + Long.BYTES;

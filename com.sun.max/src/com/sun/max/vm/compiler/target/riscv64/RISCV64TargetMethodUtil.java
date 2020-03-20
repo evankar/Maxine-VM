@@ -336,12 +336,7 @@ public final class RISCV64TargetMethodUtil {
     public static int fixupCall19Site(byte [] code, int callOffset, int displacement) {
         int instruction = extractInstruction(code, callOffset);
         assert isJumpInstruction(instruction) : "Not jump";
-        CiRegister retRegister;
-        if(isJumpLinked(instruction)) {
-            retRegister = RISCV64.ra;
-        } else {
-            retRegister = RISCV64.zero;
-        }
+        CiRegister retRegister = isJumpLinked(instruction) ? RISCV64.ra : RISCV64.zero;
         int newBranch = jumpAndLinkImmediateHelper(retRegister, displacement);
         writeInstruction(code, callOffset, newBranch);
         return 0;
@@ -368,8 +363,8 @@ public final class RISCV64TargetMethodUtil {
         if (MaxineVM.isHosted()) {
             long disp64 = target.toLong() - callSite.toLong();
             int disp32 = (int) disp64;
-            FatalError.check(disp64 == disp32, "Code displacement out of 32-bit range");
-            assert NumUtil.isSignedNbit(19, disp32);
+            assert disp64 == disp32 : "Code displacement out of 32-bit range";
+            assert NumUtil.isSignedNbit(20, disp32) : "Code displacement out of 1MiB range";
             byte[] code = tm.code();
             final int oldDisplacement = fixupCall19Site(code, callOffset, disp32);
             return callSite.plus(oldDisplacement);
