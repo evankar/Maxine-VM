@@ -363,10 +363,36 @@ public final class RISCV64TargetMethodUtil {
             long disp64 = target.toLong() - callSite.toLong();
             int disp32 = (int) disp64;
             assert disp64 == disp32 : "Code displacement out of 32-bit range";
-            assert NumUtil.isSignedNbit(20, disp32) : "Code displacement out of 1MiB range";
             byte[] code = tm.code();
-            final int oldDisplacement = fixupCall19Site(code, callOffset, disp32);
-            return callSite.plus(oldDisplacement);
+            if (NumUtil.isSignedNbit(20, disp32)) {
+                final int oldDisplacement = fixupCall19Site(code, callOffset, disp32);
+                return callSite.plus(oldDisplacement);
+            } else {
+                // locate the trampoline site that corresponds to the call site.
+                final int pos = Safepoints.safepointPosForCall(callOffset, INSTRUCTION_SIZE);
+                final int spIndex = tm.safepoints().indexOfCallAt(pos);
+                final int trampolinesIndex = spIndex * TRAMPOLINE_SIZE;
+                byte[] trampolines = tm.trampolines();
+                assert trampolines != null : tm.classMethodActor() + " -- " + tm.name();
+                assert readInstruction(trampolines, trampolinesIndex) == AUIPC_X28
+                        && readInstruction(trampolines, trampolinesIndex + INSTRUCTION_SIZE) == LD_X28_12
+                        && readInstruction(trampolines, trampolinesIndex + 2 * INSTRUCTION_SIZE) == JR_X28;
+                long oldTarget = readLong(trampolines, trampolinesIndex + TRAMPOLINE_ADDRESS_OFFSET);
+
+                writeLong(target.toLong(), trampolines, trampolinesIndex + TRAMPOLINE_ADDRESS_OFFSET);
+
+                Pointer trampolineSite = tm.trampolineStart().plus(spIndex * TRAMPOLINE_SIZE).toPointer();
+                final int trampolineOffset = trampolineSite.minus(callSite.toPointer()).toInt();
+                final int oldDisplacement  = fixupCall19Site(code, callOffset, trampolineOffset);
+
+                CodePointer callTarget = callSite.plus(oldDisplacement);
+
+                if (oldDisplacement != trampolineOffset) {
+                    return callTarget;
+                }
+                return CodePointer.from(oldTarget);
+
+            }
         } else {
             return CodePointer.from(patchCallSite(tm, callSite, target.toPointer(), true));
         }
