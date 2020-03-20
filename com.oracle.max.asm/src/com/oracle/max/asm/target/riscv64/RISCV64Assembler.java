@@ -1279,6 +1279,7 @@ public class RISCV64Assembler extends AbstractAssembler {
             writeInstruction(trampolineAuipc(), trampolines, i);
             writeInstruction(trampolineLd(), trampolines, i + INSTRUCTION_SIZE);
             writeInstruction(trampolineJalr(), trampolines, i + 2*INSTRUCTION_SIZE);
+            writeLong(0, trampolines, i + TRAMPOLINE_ADDRESS_OFFSET);
         }
         return trampolines;
     }
