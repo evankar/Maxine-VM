@@ -20,10 +20,8 @@
 package com.oracle.max.asm.target.riscv64;
 
 import static com.oracle.max.asm.target.riscv64.RISCV64.*;
+import static com.oracle.max.asm.target.riscv64.RISCV64MacroAssembler.*;
 import static com.oracle.max.asm.target.riscv64.RISCV64opCodes.*;
-import static com.oracle.max.asm.target.riscv64.RISCV64MacroAssembler.addUpperImmediatePCHelper;
-import static com.oracle.max.asm.target.riscv64.RISCV64MacroAssembler.ldHelper;
-import static com.oracle.max.asm.target.riscv64.RISCV64MacroAssembler.jumpAndLinkHelper;
 
 import com.oracle.max.asm.*;
 import com.sun.cri.ci.*;
@@ -1241,7 +1239,7 @@ public class RISCV64Assembler extends AbstractAssembler {
     }
 
     /** The number of instructions in a trampoline. */
-    private static final int TRAMPOLINE_INSTRUCTIONS = 3;
+    public static final int TRAMPOLINE_INSTRUCTIONS = 4;
 
     /** The size of a trampoline in bytes. */
     public static final int TRAMPOLINE_SIZE = (TRAMPOLINE_INSTRUCTIONS * INSTRUCTION_SIZE) + Long.BYTES;
@@ -1250,35 +1248,29 @@ public class RISCV64Assembler extends AbstractAssembler {
     public static final int TRAMPOLINE_ADDRESS_OFFSET = TRAMPOLINE_INSTRUCTIONS * INSTRUCTION_SIZE;
 
     /**
-     * An address describing the PC relative offset of the trampoline address in the trampoline
-     * itself. That is +12 from the PC. The trampoline has the format:
+     * Constructs an array of trampolines for long range calls.
+     * Each trampoline has the format:
      * <code>
      * auipc x28 0              ; load pc on x28 (scratch register)
-     * ld x28 x28 12            ; loading target on x28
+     * ld x29 x28 12            ; loading offset on x29
+     * addi x28, x28, x29       ; add offset to x28
      * jalr x0 x28 0            ; jump to target
-     * 0x0000_0000_0000_0000    ; target address
+     * 0x0000_0000_0000_0000    ; offset to target address
      * </code>
      */
-
-    private int trampolineAuipc() {
-        return addUpperImmediatePCHelper(scratchRegister, 0);
-    }
-
-    private int trampolineLd() {
-        return ldHelper(scratchRegister, scratchRegister, 12);
-    }
-
-    private int trampolineJalr() {
-        return jumpAndLinkHelper(RISCV64.zero, scratchRegister, 0);
-    }
-
     @Override
     public byte[] trampolines(int count) {
         byte[] trampolines = new byte[count * TRAMPOLINE_SIZE];
+        int instruction;
         for (int i = 0; i < trampolines.length; i += TRAMPOLINE_SIZE) {
-            writeInstruction(trampolineAuipc(), trampolines, i);
-            writeInstruction(trampolineLd(), trampolines, i + INSTRUCTION_SIZE);
-            writeInstruction(trampolineJalr(), trampolines, i + 2*INSTRUCTION_SIZE);
+            instruction = addUpperImmediatePCHelper(scratchRegister, 0);
+            writeInstruction(instruction, trampolines, i);
+            instruction = ldHelper(scratchRegister1, scratchRegister, TRAMPOLINE_INSTRUCTIONS * INSTRUCTION_SIZE);
+            writeInstruction(instruction, trampolines, i + INSTRUCTION_SIZE);
+            instruction = addSubInstructionHelper(scratchRegister, scratchRegister, scratchRegister1, false);
+            writeInstruction(instruction, trampolines, i + 2 * INSTRUCTION_SIZE);
+            instruction = jumpAndLinkHelper(zero, scratchRegister, 0);
+            writeInstruction(instruction, trampolines, i + 3 * INSTRUCTION_SIZE);
             writeLong(0, trampolines, i + TRAMPOLINE_ADDRESS_OFFSET);
         }
         return trampolines;
