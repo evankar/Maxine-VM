@@ -392,6 +392,11 @@ public class RISCV64MacroAssembler extends RISCV64Assembler {
         return opcode == JALR.getValue() || opcode == JAL.getValue();
     }
 
+    public static boolean isJumpImmediateInstruction(int instruction) {
+        int opcode = instruction & 0b1111111;
+        return opcode == JAL.getValue();
+    }
+
     public static boolean isAddInstruction(int instruction) {
         assert isAddSubInstruction(instruction) : instruction;
         int opcode = instruction & 0b1111111;

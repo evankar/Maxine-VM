@@ -448,7 +448,7 @@ public final class RISCV64TargetMethodUtil {
 
     public static boolean isRIPCall(Pointer callIP) {
         int instruction = callIP.readInt(0);
-        return isJumpInstruction(instruction);
+        return isJumpImmediateInstruction(instruction);
     }
 
     public static Pointer returnAddressPointer(StackFrameCursor frame) {
