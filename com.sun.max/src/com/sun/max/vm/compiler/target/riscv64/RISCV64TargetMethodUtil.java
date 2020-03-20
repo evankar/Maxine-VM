@@ -129,7 +129,7 @@ public final class RISCV64TargetMethodUtil {
      * carried out on the affected addresses after fixing up.
      * 
      * @param tm
-     * @param callOffset
+     * @param callSite
      * @param target
      * @param fixingUp identifies when fixing up as opposed to patching a concurrently executable call-site.
      * @return
@@ -140,7 +140,7 @@ public final class RISCV64TargetMethodUtil {
         if (is20BitArithmeticImmediate(disp20)) {
             return maybePatchBranchImmediate(callSite, disp20, fixingUp);
         }
-        return maybePatchTrampolineCall(tm, callSite, target, disp20, fixingUp);
+        return maybePatchTrampolineCall(tm, callSite, target, fixingUp);
     }
 
     /**
@@ -151,11 +151,10 @@ public final class RISCV64TargetMethodUtil {
      * @param tm
      * @param callSite
      * @param target
-     * @param disp
      * @param fixingUp identifies when fixing up as opposed to patching a concurrently executable call-site.
      * @return
      */
-    private static long maybePatchTrampolineCall(TargetMethod tm, CodePointer callSite, Pointer target, int disp, boolean fixingUp) {
+    private static long maybePatchTrampolineCall(TargetMethod tm, CodePointer callSite, Pointer target, boolean fixingUp) {
         int callOffset = (int) (callSite.toLong() - tm.codeStart().toLong());
         // locate the trampoline site that corresponds to the call site.
         int pos = Safepoints.safepointPosForCall(callOffset, INSTRUCTION_SIZE);
