@@ -344,6 +344,7 @@ public class RISCV64MacroAssembler extends RISCV64Assembler {
     }
 
     public static int jumpAndLinkImmediateHelper(CiRegister rd, int imm32) {
+        assert is20BitArithmeticImmediate(imm32);
         int instruction = JAL.getValue();
         instruction |= rd.getEncoding() << 7;
         instruction |= ((imm32 >> 20) & 1) << 31; // This places bit 20 of imm32 in bit 31 of instruction
