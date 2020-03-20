@@ -1280,9 +1280,9 @@ public class RISCV64Assembler extends AbstractAssembler {
     public byte[] trampolines(int count) {
         byte[] trampolines = new byte[count * TRAMPOLINE_SIZE];
         for (int i = 0; i < trampolines.length; i += TRAMPOLINE_SIZE) {
-            writeInt(trampolineAuipc(), trampolines, i);
-            writeInt(trampolineLd(), trampolines, i + INSTRUCTION_SIZE);
-            writeInt(trampolineJalr(), trampolines, i + 2*INSTRUCTION_SIZE);
+            writeInstruction(trampolineAuipc(), trampolines, i);
+            writeInstruction(trampolineLd(), trampolines, i + INSTRUCTION_SIZE);
+            writeInstruction(trampolineJalr(), trampolines, i + 2*INSTRUCTION_SIZE);
         }
         return trampolines;
     }
@@ -1293,7 +1293,8 @@ public class RISCV64Assembler extends AbstractAssembler {
      * @param buffer
      * @param offset
      */
-    static void writeInt(int instruction, byte[] buffer, int offset) {
+    private void writeInstruction(int instruction, byte[] buffer, int offset) {
+        assert this.codeBuffer instanceof Buffer.LittleEndian;
         assert buffer.length >= offset + 3 : "Buffer too small";
         buffer[offset + 0] = (byte) (instruction       & 0xFF);
         buffer[offset + 1] = (byte) (instruction >> 8  & 0xFF);
