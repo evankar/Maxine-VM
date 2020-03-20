@@ -297,8 +297,10 @@ public final class Aarch64TargetMethodUtil {
             } while (offset < OPTIMIZED_ENTRY_POINT.offset());
 
             code.writeInt(offset, LDR_X16_8);
-            code.writeInt(offset += INSTRUCTION_SIZE, BR_X16);
-            code.writeLong(offset += INSTRUCTION_SIZE, target.toLong());
+            offset += INSTRUCTION_SIZE;
+            code.writeInt(offset, BR_X16);
+            offset += INSTRUCTION_SIZE;
+            code.writeLong(offset, target.toLong());
             /*
              * After modifying instructions outside the permissible set the following cache maintenance is required
              * by the architecture. See B2.2.5 ARM ARM (issue E.a).

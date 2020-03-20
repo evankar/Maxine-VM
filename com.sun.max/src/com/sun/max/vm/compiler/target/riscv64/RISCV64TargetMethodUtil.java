@@ -265,9 +265,13 @@ public final class RISCV64TargetMethodUtil {
             } while (offset < OPTIMIZED_ENTRY_POINT.offset());
 
             code.writeInt(offset, AUIPC_X28);
-            code.writeInt(offset += INSTRUCTION_SIZE, LD_X28_12);
-            code.writeInt(offset += INSTRUCTION_SIZE, JR_X28);
-            code.writeLong(offset += INSTRUCTION_SIZE, target.toLong());
+            offset += INSTRUCTION_SIZE;
+            code.writeInt(offset, LD_X28_12);
+            offset += INSTRUCTION_SIZE;
+            code.writeInt(offset, JR_X28);
+            offset += INSTRUCTION_SIZE;
+            code.writeLong(offset, target.toLong());
+
             /*
              * After modifying instructions outside the permissible set the following cache maintenance is required
              * by the architecture. See B2.2.5 ARM ARM (issue E.a).
