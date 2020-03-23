@@ -1251,10 +1251,10 @@ public class RISCV64Assembler extends AbstractAssembler {
      * Constructs an array of trampolines for long range calls.
      * Each trampoline has the format:
      * <code>
-     * auipc x28 0              ; load pc on x28 (scratch register)
-     * ld x29 x28 12            ; loading offset on x29
+     * auipc x28, 0             ; load pc on x28 (scratch register)
+     * ld x29, x28, 16          ; loading offset on x29
      * addi x28, x28, x29       ; add offset to x28
-     * jalr x0 x28 0            ; jump to target
+     * jalr x0, x28, 0          ; jump to target
      * 0x0000_0000_0000_0000    ; offset to target address
      * </code>
      */
