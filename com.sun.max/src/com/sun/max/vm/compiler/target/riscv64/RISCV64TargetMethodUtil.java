@@ -166,10 +166,11 @@ public final class RISCV64TargetMethodUtil {
         int spIndex = tm.safepoints().indexOfCallAt(pos);
         Pointer trampolineSite = tm.trampolineStart().plus(spIndex * TRAMPOLINE_SIZE).toPointer();
         assert isTrampolineSite(trampolineSite);
-        long oldTarget = trampolineSite.readLong(TRAMPOLINE_ADDRESS_OFFSET);
+        final long oldOffset = trampolineSite.readLong(TRAMPOLINE_ADDRESS_OFFSET);
+        final long newOffset = target.minus(trampolineSite).toLong();
 
-        if (target.toLong() != oldTarget) {
-            trampolineSite.writeLong(TRAMPOLINE_ADDRESS_OFFSET, target.toLong());
+        if (newOffset != oldOffset) {
+            trampolineSite.writeLong(TRAMPOLINE_ADDRESS_OFFSET, newOffset);
             /*
              * For concurrent modification and execution a memory barrier here prevents the possibility
              * of the previous store of the target address being ordered after the call site store (if it
@@ -185,6 +186,7 @@ public final class RISCV64TargetMethodUtil {
         if (callTarget != trampolineSite.toLong()) {
             return callTarget;
         }
+        final long oldTarget = trampolineSite.plus(oldOffset).toLong();
         return oldTarget;
     }
 
