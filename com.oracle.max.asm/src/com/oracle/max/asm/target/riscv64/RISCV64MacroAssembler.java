@@ -1,4 +1,6 @@
 /*
+ * Copyright (c) 2020, APT Group, Department of Computer Science,
+ * School of Engineering, The University of Manchester. All rights reserved.
  * Copyright (c) 2018-2019, APT Group, School of Computer Science,
  * The University of Manchester. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -26,8 +28,21 @@ import com.sun.cri.ci.*;
 import com.sun.cri.ri.RiRegisterConfig;
 
 public class RISCV64MacroAssembler extends RISCV64Assembler {
+<<<<<<< HEAD
 
     public static final int PLACEHOLDER_INSTRUCTIONS_FOR_LONG_OFFSETS = 15;
+=======
+    /**
+     * Reserved space for worst case scenario.
+     *
+     * <code>
+     *     lui   x29, %hi(offset)
+     *     addi  x29, x29, %lo(offset)
+     *     add   x28, x28, x29
+     * </code>
+     */
+    public static final int PLACEHOLDER_INSTRUCTIONS_FOR_LONG_OFFSETS = 3;
+>>>>>>> e213a842f78983e2ba112ae46de8c64317bc206e
 
     /** Size of a call-site == 1 instruction. */
     public static final int RIP_CALL_INSTRUCTION_SIZE = INSTRUCTION_SIZE;
@@ -66,7 +81,7 @@ public class RISCV64MacroAssembler extends RISCV64Assembler {
                             ((instruction & 0xFF) << 11) | (((instruction >>> 19) & 0x1) << 19);
         displacement = displacement << 1;
         // check the sign bit
-        if (((1 << 19) & displacement) == 0) {
+        if (((1 << 20) & displacement) == 0) {
             return displacement;
         }
         // negative number -- sign extend.
@@ -118,7 +133,7 @@ public class RISCV64MacroAssembler extends RISCV64Assembler {
                 assertIfNops(branch - PATCH_BRANCH_UNCONDITIONALLY_NOPS * INSTRUCTION_SIZE, PATCH_BRANCH_UNCONDITIONALLY_NOPS);
                 assert codeBuffer.getByte(branch + 1) == 0;
                 assert codeBuffer.getShort(branch + 2) == 0;
-                if (is20BitArithmeticImmediate(branchOffset)) {
+                if (NumUtil.isSignedNbit(JTYPE_IMM_BITS, (long) branchOffset)) {
                     jal(RISCV64.zero, branchOffset, branch);
                 } else {
                     insert32BitJumpForPatch(branchOffset, branch);
@@ -344,7 +359,11 @@ public class RISCV64MacroAssembler extends RISCV64Assembler {
     }
 
     public static int jumpAndLinkImmediateHelper(CiRegister rd, int imm32) {
+<<<<<<< HEAD
         assert is20BitArithmeticImmediate(imm32);
+=======
+        assert NumUtil.isSignedNbit(21, (long) imm32);
+>>>>>>> e213a842f78983e2ba112ae46de8c64317bc206e
         int instruction = JAL.getValue();
         instruction |= rd.getEncoding() << 7;
         instruction |= ((imm32 >> 20) & 1) << 31; // This places bit 20 of imm32 in bit 31 of instruction
@@ -363,15 +382,6 @@ public class RISCV64MacroAssembler extends RISCV64Assembler {
         instruction |= rs2.getEncoding() << 20;
         instruction |= ((imm32 >> 5) & 0x3F) << 25;
         instruction |= ((imm32 >> 12) & 1) << 31;
-        return instruction;
-    }
-
-    public static int ldHelper(CiRegister rd, CiRegister rs, int imm32) {
-        int instruction = LD.getValue();
-        instruction |= rd.getEncoding() << 7;
-        instruction |= 3 << 12;
-        instruction |= rs.getEncoding() << 15;
-        instruction |= imm32 << 20;
         return instruction;
     }
 
@@ -921,16 +931,6 @@ public class RISCV64MacroAssembler extends RISCV64Assembler {
         return NumUtil.isInt(Math.abs(imm)) && isAimm((int) imm);
     }
 
-    /**
-     * Checks whether immediate can be encoded as an arithmetic immediate.
-     *
-     * @param imm Immediate has to be either an unsigned 19bit value or a signed 20bit value.
-     * @return true if valid arithmetic immediate, false otherwise.
-     */
-    public static boolean is20BitArithmeticImmediate(long imm) {
-        return NumUtil.isInt(Math.abs(imm)) && ((int) imm >= 0 ? NumUtil.isUnsignedNbit(19, (int) imm) : NumUtil.isSignedNbit(20, (int) imm));
-    }
-
     public void add(int size, CiRegister dest, CiRegister source, long delta) {
         if (delta == 0) {
             mov(dest, source);
@@ -964,7 +964,7 @@ public class RISCV64MacroAssembler extends RISCV64Assembler {
     }
 
     public void b(int offset) {
-        if (is20BitArithmeticImmediate(offset)) {
+        if (NumUtil.isSignedNbit(JTYPE_IMM_BITS, offset)) {
             jal(RISCV64.zero, offset);
         } else {
             insert32BitJump(offset);
@@ -972,7 +972,7 @@ public class RISCV64MacroAssembler extends RISCV64Assembler {
     }
 
     public void b(int offset, int pos) {
-        if (is20BitArithmeticImmediate(offset)) {
+        if (NumUtil.isSignedNbit(JTYPE_IMM_BITS, offset)) {
             jal(RISCV64.zero, offset, pos);
         } else {
             // insert32BitJumpAtPosition will insert auipc at pos - INSTRUCTION_SIZE

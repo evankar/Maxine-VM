@@ -1,5 +1,7 @@
 /*
- * Copyright (c) 2018-2020, APT Group, School of Computer Science,
+ * Copyright (c) 2020, APT Group, Department of Computer Science,
+ * School of Engineering, The University of Manchester. All rights reserved.
+ * Copyright (c) 2018-2019, APT Group, School of Computer Science,
  * The University of Manchester. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -21,9 +23,11 @@
 package com.sun.max.vm.profilers.tracing.numa;
 
 import static com.sun.max.vm.MaxineVM.*;
+import static com.sun.max.vm.intrinsics.MaxineIntrinsicIDs.*;
 import static com.sun.max.vm.thread.VmThreadLocal.*;
 
 import com.sun.max.annotate.*;
+import com.sun.max.memory.*;
 import com.sun.max.program.*;
 import com.sun.max.unsafe.*;
 import com.sun.max.util.*;
@@ -32,8 +36,12 @@ import com.sun.max.vm.actor.holder.*;
 import com.sun.max.vm.heap.*;
 import com.sun.max.vm.heap.sequential.semiSpace.*;
 import com.sun.max.vm.intrinsics.*;
+import com.sun.max.vm.jdk.*;
+import com.sun.max.vm.reference.*;
 import com.sun.max.vm.runtime.*;
 import com.sun.max.vm.thread.*;
+
+import java.util.Arrays;
 
 public class NUMAProfiler {
 
@@ -66,7 +74,10 @@ public class NUMAProfiler {
         }
     }
 
-    private static int flareObjectCounter = 0;
+    public static int flareObjectCounter = 0;
+
+    public static int start_counter = 0;
+    public static int end_counter = 0;
 
     @C_FUNCTION
     static native void numaProfiler_lock();
@@ -92,9 +103,8 @@ public class NUMAProfiler {
      * The Buffer who keeps track of the physical NUMA node of any virtual memory page allocated for the JVM Heap.
      */
     private static VirtualPagesBuffer heapPages;
+    private static VirtualPagesBuffer previousHeapPages;
 
-    @SuppressWarnings("unused")
-    private static boolean NUMAProfilerAll;
     @SuppressWarnings("unused")
     private static boolean NUMAProfilerVerbose;
     @SuppressWarnings("unused")
@@ -103,14 +113,11 @@ public class NUMAProfiler {
     private static boolean NUMAProfilerDebug;
     @SuppressWarnings("unused")
     private static boolean NUMAProfilerIncludeFinalization;
+    @SuppressWarnings("unused")
+    public static boolean NUMAProfilerIsolateDominantThread;
 
     private static int totalNewSize  = 0;
     private static int totalSurvSize = 0;
-
-    /**
-     * A buffer to transform a String object to char array.
-     */
-    private static char[] charArrayBuffer;
 
     /**
      * PROFILING POLICY 1: Explicit GC Driven
@@ -119,10 +126,11 @@ public class NUMAProfiler {
      * warmup iterations in order to profile only the effective part. The iteration
      * is calculated by the number of System.gc() calls. The MaxineVM.profileThatObject()
      * method returns false as long as the iteration counter is below the NUMAProfilerExplicitGCThreshold, which
-     * is given by the user, ignoring any object allocation up to that point.
+     * is given by the user, ignoring any object allocation up to that point. Its default value
+     * has been chosen as -1 because by 0 it means that we want to profile everything.
      */
     @SuppressWarnings("unused")
-    public static int NUMAProfilerExplicitGCThreshold;
+    public static int NUMAProfilerExplicitGCThreshold = -1;
     public static  int iteration = 0;
 
     /**
@@ -146,12 +154,23 @@ public class NUMAProfiler {
      * The NUMAProfilerFlareProfileWindow (default 1) indicates how many Flare Objects we need
      * to allocate before we stop the profiling.
      */
-    @SuppressWarnings("unused")
-    private static int    NUMAProfilerFlareAllocationThreshold;
+    public static  String NUMAProfilerFlareAllocationThresholds = "0";
+    public static int[]  flareAllocationThresholds;
     @SuppressWarnings("FieldCanBeLocal")
-    private static int    NUMAProfilerFlareProfileWindow = 1;
+    private static String NUMAProfilerFlareObjectStart          = "NUMAProfilerFlareObjectStart";
     @SuppressWarnings("FieldCanBeLocal")
-    private static String NUMAProfilerFlareObject        = "NUMAProfilerFlareObject";
+    private static String NUMAProfilerFlareObjectEnd            = "NUMAProfilerFlareObjectEnd";
+
+    /**
+     * Buffers that keep the threadId of the threads that started profiling due to reaching the flare object
+     * allocation threshold.
+     */
+    public static int[] flareObjectThreadIdBuffer;
+
+    /**
+     * A boolean variable, to show when the profiler is ON for the Flare Object Policy.
+     */
+    public static boolean enableFlareObjectProfiler = false;
 
     private static final int MINIMUMBUFFERSIZE = 500000;
 
@@ -164,6 +183,15 @@ public class NUMAProfiler {
      * This String array holds the counters' names. Those names are passed to each VmThreadLocal instance initialization.
      */
     public static String[] objectAccessCounterNames;
+
+    @CONSTANT_WHEN_NOT_ZERO
+    private static Address heapStart;
+
+    public Address toStart;
+    public Address toEnd;
+    public Address fromStart;
+    public Address fromEnd;
+    public final int memoryPageSize;
 
     /**
      * An enum that maps each Object Access Counter name with a {@link VmThreadLocal#profilingCounters} index.
@@ -183,15 +211,21 @@ public class NUMAProfiler {
 
     // The options a user can pass to the NUMA Profiler.
     static {
-        VMOptions.addFieldOption("-XX:", "NUMAProfilerAll", NUMAProfiler.class, "Profile all allocated objects. (default: false)", MaxineVM.Phase.PRISTINE);
         VMOptions.addFieldOption("-XX:", "NUMAProfilerVerbose", NUMAProfiler.class, "Verbose numa profiler output. (default: false)", MaxineVM.Phase.PRISTINE);
         VMOptions.addFieldOption("-XX:", "NUMAProfilerBufferSize", NUMAProfiler.class, "NUMAProfiler's Buffer Size.");
-        VMOptions.addFieldOption("-XX:", "NUMAProfilerExplicitGCThreshold", NUMAProfiler.class, "The number of the Explicit GCs to be performed before the NUMAProfiler starts recording. (default: 0)");
-        VMOptions.addFieldOption("-XX:", "NUMAProfilerFlareObject", NUMAProfiler.class, "The Class of the Object to be sought after by the NUMAProfiler to drive the profiling process. (default: 'AllocationProfilerFlareObject')");
-        VMOptions.addFieldOption("-XX:", "NUMAProfilerFlareAllocationThreshold", NUMAProfiler.class, "The number of the Flare objects to be allocated before the NUMAProfiler starts recording. (default: 0)");
-        VMOptions.addFieldOption("-XX:", "NUMAProfilerFlareProfileWindow", NUMAProfiler.class, "The number of the Flare objects to be allocated before the NUMAProfiler stops recording. (default: 1)");
+        VMOptions.addFieldOption("-XX:", "NUMAProfilerExplicitGCThreshold", NUMAProfiler.class,
+                "The number of the Explicit GCs to be performed before the NUMAProfiler starts recording. " +
+                "It cannot be used in combination with \"NUMAProfilerFlareAllocationThresholds\". (default: -1)");
+        VMOptions.addFieldOption("-XX:", "NUMAProfilerFlareObjectStart", NUMAProfiler.class, "The Class of the Object to be sought after by the NUMAProfiler to start the profiling process. (default: 'AllocationProfilerFlareObject')");
+        VMOptions.addFieldOption("-XX:", "NUMAProfilerFlareObjectEnd", NUMAProfiler.class, "The Class of the Object to be sought after by the NUMAProfiler to stop the profiling process. (default: 'AllocationProfilerFlareObject')");
+        VMOptions.addFieldOption("-XX:", "NUMAProfilerFlareAllocationThresholds", NUMAProfiler.class,
+                "The number of the Flare start objects to be allocated before the NUMAProfiler starts recording. " +
+                "Multiple \"windows\" may be profiled by providing a comma separated list, " +
+                "e.g. \"100,200,500\" will start profiling after the 100th, the 200th, and the 500th Flare object " +
+                "allocation till the thread that started the profiling allocates a Flare end object. It cannot be used in combination with \"NUMAProfilerExplicitGCThreshold\". (default: \"0\")");
         VMOptions.addFieldOption("-XX:", "NUMAProfilerDebug", NUMAProfiler.class, "Print information to help in NUMAProfiler's Validation. (default: false)", MaxineVM.Phase.PRISTINE);
         VMOptions.addFieldOption("-XX:", "NUMAProfilerIncludeFinalization", NUMAProfiler.class, "Include memory accesses performed due to Finalization. (default: false)", MaxineVM.Phase.PRISTINE);
+        VMOptions.addFieldOption("-XX:", "NUMAProfilerIsolateDominantThread", NUMAProfiler.class, "Isolate the dominant thread object allocations (default: false)", MaxineVM.Phase.PRISTINE);
 
         objectAccessCounterNames = new String[]{
             "LOCAL_TUPLE_WRITES", "INTERNODE_TUPLE_WRITES", "INTERBLADE_TUPLE_WRITES",
@@ -209,6 +243,8 @@ public class NUMAProfiler {
         if (NUMAProfilerVerbose) {
             Log.println("(NUMA Profiler): NUMAProfiler Initialization.");
         }
+
+        splitStringtoSortedIntegers();
 
         int survivorBufferSize = MINIMUMBUFFERSIZE;
         int allocatorBufferSize = MINIMUMBUFFERSIZE;
@@ -234,7 +270,7 @@ public class NUMAProfiler {
         survivors1 = new RecordBuffer(survivorBufferSize, "Survivors Buffer No1");
         survivors2 = new RecordBuffer(survivorBufferSize, "Survivors Buffer No2");
 
-        charArrayBuffer = new char[RecordBuffer.MAX_CHARS];
+        memoryPageSize = NUMALib.numaPageSize();
 
         if (NUMAProfilerVerbose) {
             Log.println("(NUMA Profiler): Initialize the Heap Boundaries Buffer.");
@@ -242,6 +278,8 @@ public class NUMAProfiler {
         initializeHeapBoundariesBuffer();
 
         numaConfig = new NUMALib();
+
+        heapStart = vm().config.heapScheme().getHeapStartAddress();
 
         profilingCycle = 1;
         if (NUMAProfilerVerbose) {
@@ -257,7 +295,7 @@ public class NUMAProfiler {
         //initialize thread local counters
         initProfilingCounters();
 
-        if (profileAll() && NUMAProfilerExplicitGCThreshold == 0) {
+        if (NUMAProfilerExplicitGCThreshold == 0) {
             enableProfiling();
         }
 
@@ -283,25 +321,51 @@ public class NUMAProfiler {
      * @param hub
      */
     public static void checkForFlareObject(Hub hub) {
-        if (MaxineVM.useNUMAProfiler) {
+        final boolean lockDisabledSafepoints = lock();
+        if (MaxineVM.useNUMAProfiler && !NUMAProfilerFlareAllocationThresholds.equals("0")) {
             String type = hub.classActor.name();
-            if (NUMAProfilerFlareAllocationThreshold != 0 &&
-                            (NUMAProfilerFlareAllocationThreshold + NUMAProfilerFlareProfileWindow > flareObjectCounter) &&
-                            type.contains(NUMAProfilerFlareObject)) {
+            final int currentThreadID = VmThread.current().id();
+            if (type.contains(NUMAProfilerFlareObjectStart)) {
                 flareObjectCounter++;
-                if (flareObjectCounter == NUMAProfilerFlareAllocationThreshold) {
-                    if (NUMAProfilerVerbose) {
-                        Log.println("(NUMA Profiler): Enable profiling due to flare object allocation");
+                if (NUMAProfilerVerbose) {
+                    Log.print("(NUMA Profiler): Start Flare-Object Counter: ");
+                    Log.println(flareObjectCounter);
+                }
+                if (flareObjectCounter == flareAllocationThresholds[start_counter]) {
+                    if (enableFlareObjectProfiler) {
+                        throw FatalError.unexpected("The NUMA Profiler supports only a single profiling instance a time. " +
+                            "It seams that there is already an ongoing Flare-Object profiling");
                     }
-                    enableProfiling();
-                } else if (flareObjectCounter == (NUMAProfilerFlareAllocationThreshold + NUMAProfilerFlareProfileWindow)) {
+                    flareObjectThreadIdBuffer[start_counter] = currentThreadID;
                     if (NUMAProfilerVerbose) {
-                        Log.println("(NUMA Profiler): Disable profiling due to flare object allocation");
+                        Log.print("(NUMA Profiler): Enable profiling due to flare object allocation for id ");
+                        Log.println(currentThreadID);
                     }
+                    if (start_counter < flareAllocationThresholds.length - 1) {
+                        start_counter++;
+                    }
+                    if (NUMAProfiler.NUMAProfilerIsolateDominantThread) {
+                        setProfilingTLA.run(VmThread.currentTLA());
+                    } else {
+                        enableProfiling();
+                    }
+                    enableFlareObjectProfiler = true;
+                }
+            } else if (enableFlareObjectProfiler == true && flareObjectThreadIdBuffer[end_counter] == currentThreadID && type.contains(NUMAProfilerFlareObjectEnd)) {
+                if (NUMAProfilerVerbose) {
+                    Log.print("(NUMA Profiler): Disable profiling due to flare end object allocation for id ");
+                    Log.println(currentThreadID);
+                }
+                end_counter++;
+                if (NUMAProfiler.NUMAProfilerIsolateDominantThread) {
+                    resetProfilingTLA.run(VmThread.currentTLA());
+                } else {
                     disableProfiling();
                 }
+                enableFlareObjectProfiler = false;
             }
         }
+        unlock(lockDisabledSafepoints);
     }
 
     public static boolean shouldProfile() {
@@ -312,43 +376,11 @@ public class NUMAProfiler {
         return false;
     }
 
-    /**
-     * Find heap's first page address and Numa Node and set it in heapPages.
-     */
-    private void findFirstHeapPage() {
-        Address startAddress = vm().config.heapScheme().getHeapStartAddress();
-        int node = NUMALib.numaNodeOfAddress(startAddress.toLong());
-        heapPages.writeAddr(0, startAddress.toLong());
-        heapPages.writeNumaNode(0, node);
-    }
-
     private void initializeHeapBoundariesBuffer() {
-        int pageSize = NUMALib.numaPageSize();
-        int bufSize = Heap.maxSize().dividedBy(pageSize).toInt();
+        int bufSize = Heap.maxSize().dividedBy(memoryPageSize).toInt();
         heapPages = new VirtualPagesBuffer(bufSize);
-        findFirstHeapPage();
+        heapPages.writeNumaNode(0, NUMALib.numaNodeOfAddress(heapStart.toLong()));
     }
-
-    public static boolean profileAll() {
-        return NUMAProfilerAll;
-    }
-
-    /**
-     * This method has the same functionality as the String.toCharArray() but
-     * we avoid the new object creation.
-     * @param str, The String to be converted to char array.
-     */
-    private static char[] asCharArray(String str) {
-        int i = 0;
-        while (i < str.length()) {
-            charArrayBuffer[i] = str.charAt(i);
-            i++;
-        }
-        charArrayBuffer[i] = '\0';
-        return charArrayBuffer;
-    }
-
-    private static boolean ongoingAllocation = false;
 
     /**
      * This method is called when a profiled object is allocated.
@@ -362,57 +394,13 @@ public class NUMAProfiler {
          * we read it before locking. */
         final boolean lockDisabledSafepoints = lock();
         //transform the object type from String to char[] and pass the charArrayBuffer[] to record
-        charArrayBuffer = asCharArray(type);
         final int threadId = VmThread.current().id();
-        //detect recursive allocations if another allocation is ongoing
-        if (NUMAProfilerDebug) {
-            if (ongoingAllocation) {
-                Log.println("Recursive Allocation. ");
-                Log.println(type);
-                throw FatalError.unexpected("Recursive Allocation.");
-            }
-            ongoingAllocation = true;
-        }
         //guard RecordBuffer from overflow
-        if (newObjects.currentIndex >= newObjects.bufferSize) {
-            Log.print("Allocations Buffer out of bounds. Increase the Buffer Size.");
-            MaxineVM.exit(1);
-        }
-        newObjects.record(uniqueId, threadId, charArrayBuffer, size, address);
+        FatalError.check(newObjects.currentIndex < newObjects.bufferSize, "Allocations Buffer out of bounds. Increase the Buffer Size.");
+        newObjects.record(uniqueId, threadId, JDK_java_lang_String.getCharArray(type), size, address);
         uniqueId++;
         totalNewSize = totalNewSize + size;
-        if (NUMAProfilerDebug) {
-            ongoingAllocation = false;
-        }
         unlock(lockDisabledSafepoints);
-    }
-
-    /**
-     * Get the physical NUMA node id for a virtual address.
-     *
-     * We check whether the NUMA node is found. It might return EFAULT in case the page was still
-     * unallocated to a physical NUMA node by the last {@link NUMALib} coreToNUMANodeMap update.
-     * In that case the system call from NUMALib is called directly and the values are updated.
-     *
-     * @param firstPageAddress
-     * @param address
-     * @return physical NUMA node id
-     */
-    private static int getObjectNumaNode(long firstPageAddress, long address) {
-        int pageSize = NUMALib.numaPageSize();
-        long numerator = address - firstPageAddress;
-        long div = numerator / (long) pageSize;
-        int pageIndex = (int) div;
-
-        int objNumaNode = heapPages.readNumaNode(pageIndex);
-        // check whether the numa node is found
-        if (objNumaNode == NUMALib.EFAULT) {
-            long pageAddr = heapPages.readAddr(pageIndex);
-            int node = NUMALib.numaNodeOfAddress(pageAddr);
-            heapPages.writeNumaNode(pageIndex, node);
-            objNumaNode = node;
-        }
-        return objNumaNode;
     }
 
     /**
@@ -420,16 +408,15 @@ public class NUMAProfiler {
      * A memory access can be either local (a thread running on N numa node accesses an object on N numa node),
      * inter-node (a thread running on N numa node accesses an object on M numa node with both N and M being on the same blade),
      * or inter-blade (a thread running on N numa node accesses an object on Z numa node which is part of another blade).
-     * @param firstPageAddress
      * @param address
      * @return {@code accessCounterValue} + 0 for LOCAL access, {@code accessCounterValue} + 1 for INTER-NODE access, {@code accessCounterValue} + 2 for INTER-BLADE access (see {@link ACCESS_COUNTER} values)
      *
      */
-    private static int assessAccessLocality(long firstPageAddress, long address, int accessCounterValue) {
+    private static int assessAccessLocality(long address, int accessCounterValue) {
         // get the Numa Node where the thread which is performing the write is running
         final int threadNumaNode = Intrinsics.getCpuID() >> MaxineIntrinsicIDs.NUMA_NODE_SHIFT;
         // get the Numa Node where the written object is placed
-        final int objectNumaNode = getObjectNumaNode(firstPageAddress, address);
+        final int objectNumaNode = getNumaNodeForAddress(address);
 
         if (threadNumaNode != objectNumaNode) {
             // get the Blade where the thread Numa Node is located
@@ -449,14 +436,13 @@ public class NUMAProfiler {
     private static void increaseAccessCounter(int counter) {
         Pointer tla = VmThread.currentTLA();
         assert ETLA.load(tla) == tla;
-        int value = profilingCounters[counter].load(tla).toInt() + 1;
-        profilingCounters[counter].store(tla, Address.fromInt(value));
+        long value = profilingCounters[counter].load(tla).toLong() + 1;
+        profilingCounters[counter].store(tla, Address.fromLong(value));
     }
 
     @NO_SAFEPOINT_POLLS("numa profiler call chain must be atomic")
     @NEVER_INLINE
     public static void profileAccess(ACCESS_COUNTER counter, long address) {
-        long firstPageAddress = heapPages.readAddr(0);
 
         // if the written object is not part of the data heap
         // TODO: implement some action, currently ignore
@@ -464,7 +450,7 @@ public class NUMAProfiler {
             return;
         }
 
-        final int accessCounter = assessAccessLocality(firstPageAddress, address, counter.value);
+        final int accessCounter = assessAccessLocality(address, counter.value);
 
         // increment local or remote writes
         increaseAccessCounter(accessCounter);
@@ -508,75 +494,119 @@ public class NUMAProfiler {
     private void resetHeapBoundaries() {
         final boolean lockDisabledSafepoints = lock();
         heapPages.resetBuffer();
-        findFirstHeapPage();
+        heapPages.writeNumaNode(0, NUMALib.numaNodeOfAddress(heapStart.toLong()));
         unlock(lockDisabledSafepoints);
     }
 
     /**
-     * Find the NUMA Node for each allocated Object.
-     * For every object, find the virtual memory page where the object is placed and get its physical NUMA Node.
+     * Finds the index of the memory page of an address in the heapPages Buffer.
+     * It is based on the calculation:
+     * pageIndex = (address - firstPageAddress) / pageSize
+     * @param address an address
+     * @return the memory page index of the address
      */
-    private void findObjectNumaNode() {
-        int pageSize = NUMALib.numaPageSize();
-        long objectAddress;
-        long firstPageAddress = heapPages.readAddr(0);
-        int pageIndex;
-        int maxPageIndex = heapPages.pagesCurrentIndex;
-        for (int i = 0; i < newObjects.currentIndex; i++) {
-            objectAddress = newObjects.readAddr(i);
-            // safe for heap up to 8TB
-            long numerator = objectAddress - firstPageAddress;
-            long div = numerator / (long) pageSize;
-            pageIndex = (int) div;
-            if (pageIndex > maxPageIndex) {
-                Log.println("Heap Ranges Overflow");
-                MaxineVM.exit(1);
-            }
-            int node = heapPages.readNumaNode(pageIndex);
-            // compare the calculated object numa node with the libnuma system
-            // call returned value for validation (note: increased overhead)
-            assert node == NUMALib.numaNodeOfAddress(newObjects.readAddr(i));
-            newObjects.writeNode(i, node);
-
-            if (VirtualPagesBuffer.debug) {
-                Log.print("object in address ");
-                Log.print(objectAddress);
-                Log.print(" found in range ");
-                Log.print(pageIndex);
-                Log.print(" [");
-                Log.print(heapPages.readAddr(pageIndex));
-                Log.println("]");
-            }
-        }
+    private static int getHeapPagesIndexOfAddress(Address address) {
+        return address.minus(heapStart).dividedBy(numaProfiler.memoryPageSize).toInt();
     }
 
     /**
-     * Find the NUMA Node for each virtual memory page of the JVM Heap.
+     * Find the NUMA Node for each allocated Object.
+     * For every object, call the {@linkplain #getNumaNodeForAddress(long)} method to get its physical NUMA Node.
+     * Write the node in newObjects Buffer.
      */
-    private void findNumaNodeForPages() {
-        assert vm().config.heapScheme() instanceof SemiSpaceHeapScheme;
-        Address currentAddress = vm().config.heapScheme().getHeapStartAddress();
-        int     index          = 0;
-        while (vm().config.heapScheme().contains(currentAddress)) {
-            int node = NUMALib.numaNodeOfAddress(currentAddress.toLong());
-            if (VirtualPagesBuffer.debug) {
-                Log.print("write starting address ");
-                Log.print(currentAddress.toLong());
-                Log.print(" of range ");
-                Log.println(index);
-            }
-            heapPages.writeAddr(index, currentAddress.toLong());
-            heapPages.writeNumaNode(index, node);
-            index++;
-            currentAddress = currentAddress.plus(NUMALib.numaPageSize());
-            //update stats
-            if (node < 0) {
+    private void findNumaNodeForAllAllocatedObjects() {
+        long objectAddress;
+
+        for (int i = 0; i < newObjects.currentIndex; i++) {
+            objectAddress = newObjects.readAddr(i);
+            int node = getNumaNodeForAddress(objectAddress);
+
+            // compare the calculated object numa node with the libnuma system
+            // call returned value for validation (note: increased overhead)
+            assert node == NUMALib.numaNodeOfAddress(newObjects.readAddr(i));
+
+            // Write the node in the buffer
+            newObjects.writeNode(i, node);
+        }
+    }
+
+    @INTRINSIC(UNSAFE_CAST)
+    private static native MemoryRegion asMemoryRegion(Object object);
+
+    private final Pointer.Procedure findNumaNodeForSpace = new Pointer.Procedure() {
+        public void run(Pointer pointer) {
+            Reference    reference = Reference.fromOrigin(pointer);
+            MemoryRegion space     = asMemoryRegion(reference);
+            findNumaNodeForAllSpaceMemoryPages(space);
+        }
+    };
+
+    /**
+     * Find the NUMA Node for each virtual memory page of the JVM Heap.
+     * Currently implemented only for the {@link SemiSpaceHeapScheme}.
+     */
+    private void findNumaNodeForAllHeapMemoryPages() {
+        vm().config.heapScheme().forAllSpaces(findNumaNodeForSpace);
+    }
+
+    /**
+     * Find the NUMA node for each memory page in the premises of a specific Memory Space.
+     *
+     * @param space
+     */
+    private void findNumaNodeForAllSpaceMemoryPages(MemoryRegion space) {
+        int pageIndex;
+        int node;
+
+        Address currentAddress = space.start();
+
+        while (currentAddress.lessThan(space.end())) {
+            // Get NUMA node of address using NUMALib
+            node = NUMALib.numaNodeOfAddress(currentAddress.toLong());
+            // Get the index of the memory page in the heapPages Buffer
+            pageIndex = getHeapPagesIndexOfAddress(currentAddress);
+            // Write the NUMA node of the page in the heapPages Buffer
+            heapPages.writeNumaNode(pageIndex, node);
+
+            // Get the next memory page address
+            currentAddress = currentAddress.plus(memoryPageSize);
+
+            // if no NUMA node is found the page is still unallocated
+            if (node == NUMALib.EFAULT) {
                 node = VirtualPagesBuffer.maxNumaNodes;
             }
+
+            // update stats
             int count = heapPages.readStats(node);
             heapPages.writeStats(node, count + 1);
         }
 
+    }
+
+    /**
+     * Get the physical NUMA node id for a virtual address.
+     *
+     * We use {@code heapPages} (a {@link VirtualPagesBuffer} instance) as a "cache" that stores a mapping
+     * to a physical NUMA node for each virtual memory page. We calculate the index of the memory page into
+     * the cache (to avoid the linear search) and we get the corresponding NUMA node.
+     * It might return EFAULT (=-14) in case it is the first hit of the memory page in the current cycle.
+     * In that case the system call from NUMALib is called directly and the values are updated.
+     *
+     * @param address
+     * @return physical NUMA node id
+     */
+    private static int getNumaNodeForAddress(long address) {
+        int pageIndex = getHeapPagesIndexOfAddress(Address.fromLong(address));
+
+        int objNumaNode = heapPages.readNumaNode(pageIndex);
+        // if outdated, use the sys call to get the numa node and update heapPages buffer
+        if (objNumaNode == NUMALib.EFAULT) {
+            Address pageAddr = heapStart.plus(Address.fromInt(numaProfiler.memoryPageSize).times(pageIndex));
+            int node = NUMALib.numaNodeOfAddress(pageAddr.toLong());
+            heapPages.writeNumaNode(pageIndex, node);
+            objNumaNode = node;
+        }
+        return objNumaNode;
     }
 
     /**
@@ -603,10 +633,7 @@ public class NUMAProfiler {
                 // update NUMA Node
                 int node = NUMALib.numaNodeOfAddress(newAddr);
                 //guard survivors RecordBuffer from overflow
-                if (to.currentIndex >= to.bufferSize) {
-                    Log.print("Survivor Buffer out of bounds! Increase the Buffer Size.");
-                    MaxineVM.exit(1);
-                }
+                FatalError.check(to.currentIndex < to.bufferSize, "Survivor Buffer out of bounds! Increase the Buffer Size.");
                 // write it to Buffer
                 to.record(from.readId(i), from.readThreadId(i), from.readType(i), from.readSize(i), newAddr, node);
                 totalSurvSize = totalSurvSize + from.readSize(i);
@@ -665,8 +692,8 @@ public class NUMAProfiler {
 
         // guard libnuma sys call usage during non-profiling cycles
         if (newObjects.currentIndex > 0) {
-            findNumaNodeForPages();
-            findObjectNumaNode();
+            findNumaNodeForAllHeapMemoryPages();
+            findNumaNodeForAllAllocatedObjects();
         }
 
         if (NUMAProfilerVerbose) {
@@ -718,11 +745,6 @@ public class NUMAProfiler {
         newObjects.resetBuffer();
 
         if (NUMAProfilerVerbose) {
-            Log.println("(NUMA Profiler): Reset HeapBoundaries Buffer. [post-gc phase]");
-        }
-        resetHeapBoundaries();
-
-        if (NUMAProfilerVerbose) {
             Log.println("(NUMA Profiler): Dump Survivors Buffer. [post-GC phase]");
         }
 
@@ -768,6 +790,22 @@ public class NUMAProfiler {
 
     }
 
+    /**
+     *  A method to transform a string of that form "int0,int1,int2" into an integer array [int0, int1, int2].
+     */
+    private void splitStringtoSortedIntegers() {
+
+        String[] thresholds = NUMAProfilerFlareAllocationThresholds.split(",");
+        flareObjectThreadIdBuffer = new int[thresholds.length];
+        flareAllocationThresholds = new int[thresholds.length];
+        for (int i = 0; i < thresholds.length; i++) {
+            flareAllocationThresholds[i] = Integer.parseInt(thresholds[i]);
+        }
+        Arrays.sort(flareAllocationThresholds);
+
+    }
+
+
     private static final Pointer.Predicate profilingPredicate = new Pointer.Predicate() {
         @Override
         public boolean evaluate(Pointer tla) {
@@ -809,7 +847,7 @@ public class NUMAProfiler {
             Pointer etla = ETLA.load(tla);
             for (int i = 0; i < profilingCounters.length; i++) {
                 VmThreadLocal profilingCounter = profilingCounters[i];
-                final int count = profilingCounter.load(etla).toInt();
+                final long count = profilingCounter.load(etla).toLong();
                 if (count != 0) {
                     Log.print("(accessCounter);");
                     Log.print(profilingCycle);
@@ -890,8 +928,8 @@ public class NUMAProfiler {
 
         // guard libnuma sys call usage during non-profiling cycles
         if (newObjects.currentIndex > 0) {
-            findNumaNodeForPages();
-            findObjectNumaNode();
+            findNumaNodeForAllHeapMemoryPages();
+            findNumaNodeForAllAllocatedObjects();
         }
 
         if (!NUMAProfilerDebug) {

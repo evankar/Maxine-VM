@@ -1,4 +1,6 @@
 /*
+ * Copyright (c) 2020, APT Group, Department of Computer Science,
+ * School of Engineering, The University of Manchester. All rights reserved.
  * Copyright (c) 2018-2019, APT Group, School of Computer Science,
  * The University of Manchester. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -273,6 +275,11 @@ public class RISCV64 extends CiArchitecture {
         return isIntReg(reg) && !reg.equals(zr) && !reg.equals(sp);
     }
 
+<<<<<<< HEAD
+=======
+    public static final int MAX_DIRECT_JUMP_SIZE = CiUtil.M - CiUtil.K;
+
+>>>>>>> e213a842f78983e2ba112ae46de8c64317bc206e
     @Override
     public boolean usesTrampolines() {
         return true;

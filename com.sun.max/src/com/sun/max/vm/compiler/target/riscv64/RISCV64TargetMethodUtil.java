@@ -1,4 +1,6 @@
 /*
+ * Copyright (c) 2020, APT Group, Department of Computer Science,
+ * School of Engineering, The University of Manchester. All rights reserved.
  * Copyright (c) 2018-2019, APT Group, School of Computer Science,
  * The University of Manchester. All rights reserved.
  * Copyright (c) 2007, 2011, Oracle and/or its affiliates. All rights reserved.
@@ -51,6 +53,7 @@ public final class RISCV64TargetMethodUtil {
     public static final int RET = 0x8067;
 
     /**
+<<<<<<< HEAD
      * Instruction encodings for call trampolines.
      * auipc x28, #0
      */
@@ -64,6 +67,26 @@ public final class RISCV64TargetMethodUtil {
     private static final int ADD_X28_X28_X29 = addSubInstructionHelper(RISCV64.x28, RISCV64.x28, RISCV64.x29, false);
 
     /** jr x28 */
+=======
+     * Instruction encodings for {@code auipc x28, #0}.
+     */
+    private static final int AUIPC_X28 = addUpperImmediatePCHelper(RISCV64.x28, 0);
+
+    /**
+     * Instruction encodings for {@code lw x29, 12(x28)}.
+     */
+    private static final int LW_X29_X28_16 =
+            lwHelper(RISCV64.x29, RISCV64.x28, TRAMPOLINE_INSTRUCTIONS * INSTRUCTION_SIZE);
+
+    /**
+     * Instruction encodings for {@code add x28, x28, x29}.
+     */
+    private static final int ADD_X28_X28_X29 = addSubInstructionHelper(RISCV64.x28, RISCV64.x28, RISCV64.x29, false);
+
+    /**
+     * Instruction encodings for {@code jr x28}.
+     */
+>>>>>>> e213a842f78983e2ba112ae46de8c64317bc206e
     private static final int JR_X28 = jumpAndLinkHelper(RISCV64.zero, RISCV64.x28, 0);
 
     /**
@@ -87,7 +110,11 @@ public final class RISCV64TargetMethodUtil {
      */
     private static boolean isTrampolineSite(Pointer p) {
         if (AUIPC_X28 == p.readInt(0) &&
+<<<<<<< HEAD
             LD_X29_X28_16 == p.readInt(INSTRUCTION_SIZE) &&
+=======
+            LW_X29_X28_16 == p.readInt(INSTRUCTION_SIZE) &&
+>>>>>>> e213a842f78983e2ba112ae46de8c64317bc206e
             ADD_X28_X28_X29 == p.readInt(2 * INSTRUCTION_SIZE) &&
             JR_X28 == p.readInt(3 * INSTRUCTION_SIZE)) {
             return true;
@@ -119,7 +146,11 @@ public final class RISCV64TargetMethodUtil {
         final int immOffset = jumpAndLinkExtractDisplacement(instruction);
         final Pointer trampolineSite = callSitePointer.plus(immOffset);
         if (isTrampolineSite(trampolineSite)) {
+<<<<<<< HEAD
             long offset = trampolineSite.readLong(TRAMPOLINE_ADDRESS_OFFSET);
+=======
+            long offset = trampolineSite.readInt(TRAMPOLINE_OFFSET_OFFSET);
+>>>>>>> e213a842f78983e2ba112ae46de8c64317bc206e
             return CodePointer.from(trampolineSite.plus(offset));
         }
         return callSite.plus(immOffset);
@@ -143,7 +174,11 @@ public final class RISCV64TargetMethodUtil {
     private static long patchCallSite(TargetMethod tm, CodePointer callSite, Pointer target, boolean fixingUp) {
         long disp = target.toLong() - callSite.toLong();
         int disp20 = (int) disp;
+<<<<<<< HEAD
         if (is20BitArithmeticImmediate(disp20)) {
+=======
+        if (NumUtil.isSignedNbit(21, (long) disp20)) {
+>>>>>>> e213a842f78983e2ba112ae46de8c64317bc206e
             return maybePatchBranchImmediate(callSite, disp20, fixingUp);
         }
         return maybePatchTrampolineCall(tm, callSite, target, fixingUp);
@@ -167,11 +202,19 @@ public final class RISCV64TargetMethodUtil {
         int spIndex = tm.safepoints().indexOfCallAt(pos);
         Pointer trampolineSite = tm.trampolineStart().plus(spIndex * TRAMPOLINE_SIZE).toPointer();
         assert isTrampolineSite(trampolineSite);
+<<<<<<< HEAD
         final long oldOffset = trampolineSite.readLong(TRAMPOLINE_ADDRESS_OFFSET);
         final long newOffset = target.minus(trampolineSite).toLong();
 
         if (newOffset != oldOffset) {
             trampolineSite.writeLong(TRAMPOLINE_ADDRESS_OFFSET, newOffset);
+=======
+        final long oldOffset = trampolineSite.readInt(TRAMPOLINE_OFFSET_OFFSET);
+        final int newOffset = target.minus(trampolineSite).toInt();
+
+        if (newOffset != oldOffset) {
+            trampolineSite.writeInt(TRAMPOLINE_OFFSET_OFFSET, newOffset);
+>>>>>>> e213a842f78983e2ba112ae46de8c64317bc206e
             /*
              * For concurrent modification and execution a memory barrier here prevents the possibility
              * of the previous store of the target address being ordered after the call site store (if it
@@ -202,7 +245,11 @@ public final class RISCV64TargetMethodUtil {
      * @return
      */
     private static long maybePatchBranchImmediate(CodePointer callSite, int disp20, boolean fixingUp) {
+<<<<<<< HEAD
         assert is20BitArithmeticImmediate(disp20);
+=======
+        assert NumUtil.isSignedNbit(21, (long) disp20);
+>>>>>>> e213a842f78983e2ba112ae46de8c64317bc206e
         int instruction = callSite.toPointer().readInt(0);
         assert isJumpInstruction(instruction) : instruction;
         int oldDisp = jumpAndLinkExtractDisplacement(instruction);
@@ -275,7 +322,11 @@ public final class RISCV64TargetMethodUtil {
             final int auipcOffset = patchOffset;
             code.writeInt(patchOffset, AUIPC_X28);
             patchOffset += INSTRUCTION_SIZE;
+<<<<<<< HEAD
             code.writeInt(patchOffset, LD_X29_X28_16);
+=======
+            code.writeInt(patchOffset, LW_X29_X28_16);
+>>>>>>> e213a842f78983e2ba112ae46de8c64317bc206e
             patchOffset += INSTRUCTION_SIZE;
             code.writeInt(patchOffset, ADD_X28_X28_X29);
             patchOffset += INSTRUCTION_SIZE;
@@ -386,6 +437,7 @@ public final class RISCV64TargetMethodUtil {
                 final int trampolinesIndex = spIndex * TRAMPOLINE_SIZE;
                 byte[] trampolines = tm.trampolines();
                 assert trampolines != null : tm.classMethodActor() + " -- " + tm.name();
+<<<<<<< HEAD
                 assert readInstruction(trampolines, trampolinesIndex) == AUIPC_X28
                         && readInstruction(trampolines, trampolinesIndex + INSTRUCTION_SIZE) == LD_X29_X28_16
                         && readInstruction(trampolines, trampolinesIndex + 2 * INSTRUCTION_SIZE) == ADD_X28_X28_X29
@@ -395,6 +447,17 @@ public final class RISCV64TargetMethodUtil {
                 CodePointer trampolineSite = tm.trampolineStart().plus(spIndex * TRAMPOLINE_SIZE);
                 final long newOffset = target.minus(trampolineSite).toLong();
                 writeLong(newOffset, trampolines, trampolinesIndex + TRAMPOLINE_ADDRESS_OFFSET);
+=======
+                assert readInt(trampolines, trampolinesIndex) == AUIPC_X28
+                        && readInt(trampolines, trampolinesIndex + INSTRUCTION_SIZE) == LW_X29_X28_16
+                        && readInt(trampolines, trampolinesIndex + 2 * INSTRUCTION_SIZE) == ADD_X28_X28_X29
+                        && readInt(trampolines, trampolinesIndex + 3 * INSTRUCTION_SIZE) == JR_X28;
+                final long oldOffset = readInt(trampolines, trampolinesIndex + TRAMPOLINE_OFFSET_OFFSET);
+
+                CodePointer trampolineSite = tm.trampolineStart().plus(spIndex * TRAMPOLINE_SIZE);
+                final int newOffset = target.minus(trampolineSite).toInt();
+                writeInt(newOffset, trampolines, trampolinesIndex + TRAMPOLINE_OFFSET_OFFSET);
+>>>>>>> e213a842f78983e2ba112ae46de8c64317bc206e
 
                 final int trampolineOffset = trampolineSite.minus(callSite.toPointer()).toInt();
                 final int oldDisplacement  = fixupCall19Site(code, callOffset, trampolineOffset);

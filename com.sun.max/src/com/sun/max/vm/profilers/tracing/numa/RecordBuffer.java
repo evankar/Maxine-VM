@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2019, APT Group, School of Computer Science,
+ * Copyright (c) 2018-2020, APT Group, School of Computer Science,
  * The University of Manchester. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -118,9 +118,7 @@ class RecordBuffer {
                 VirtualMemory.Type.DATA);
 
         if (space.isZero()) {
-            Log.print(this.buffersName);
-            Log.print("'s Type Array Allocation Failed.");
-            System.exit(0);
+            throw FatalError.unexpected(this.buffersName + "'s Type Array Allocation Failed.");
         }
         return space;
     }
@@ -149,13 +147,10 @@ class RecordBuffer {
             if (writeIndex * Character.BYTES >= StringBufferSizeInBytes) {
                 Log.print("Off-heap String array overflow detected at index: ");
                 Log.println(writeIndex * Character.BYTES);
-                Log.println("Suggestion: Increase the AllocationProfilerBufferSize.");
+                Log.println("Suggestion: Increase the NUMAProfilerBufferSize.");
                 break;
             }
             types.plus(writeIndex * Character.BYTES).setChar(c);
-            if (c == '\0') {
-                break;
-            }
             charIndex++;
             writeIndex = stringIndex + charIndex;
         }
@@ -228,12 +223,6 @@ class RecordBuffer {
         writeInt(sizes, currentIndex, size);
         writeLong(addresses, currentIndex, address);
         currentIndex++;
-        if (currentIndex >= bufferSize) {
-            Log.print("Off-heap Record Buffer overflow detected at index: ");
-            Log.println(currentIndex);
-            Log.println("Suggestion: Increase the AllocationProfilerBufferSize.");
-            System.exit(1);
-        }
     }
 
     @NO_SAFEPOINT_POLLS("numa profiler call chain must be atomic")

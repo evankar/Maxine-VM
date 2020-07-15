@@ -21,7 +21,7 @@
  * 2 along with this work; if not, write to the Free Software Foundation,
  * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
  */
-package com.sun.max.vm.heap.sequential.semiSpace;
+package com.sun.max.vm.heap.sequential.multiSemiSpace;
 
 import static com.sun.max.vm.VMOptions.*;
 import static com.sun.max.vm.heap.Heap.*;
@@ -41,12 +41,11 @@ import com.sun.max.vm.*;
 import com.sun.max.vm.actor.holder.*;
 import com.sun.max.vm.code.*;
 import com.sun.max.vm.heap.*;
-import com.sun.max.vm.heap.Heap.GCCallbackPhase;
+import com.sun.max.vm.heap.Heap.*;
 import com.sun.max.vm.heap.debug.*;
 import com.sun.max.vm.layout.*;
-import com.sun.max.vm.log.VMLog.Record;
-import com.sun.max.vm.log.*;
-import com.sun.max.vm.log.VMLogger.Interval;
+import com.sun.max.vm.log.VMLog.*;
+import com.sun.max.vm.log.VMLogger.*;
 import com.sun.max.vm.log.hosted.*;
 import com.sun.max.vm.management.*;
 import com.sun.max.vm.reference.*;
@@ -55,20 +54,21 @@ import com.sun.max.vm.thread.*;
 import com.sun.max.vm.ti.*;
 
 /**
- * A simple semispace scavenger heap.
+ * A heap split in multiple smaller simple semispace scavenger heaps.
  */
-public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisitor {
+public class MultiSemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisitor {
 
-    public static final String FROM_REGION_NAME = "Heap-SemiSpace-From";
-    public static final String TO_REGION_NAME = "Heap-SemiSpace-To";
-    public static final String FROM_GROW_REGION_NAME = "Heap-SemiSpace-From-Grow";
-    public static final String TO_GROW_REGION_NAME = "Heap-SemiSpace-To-Grow";
+    public static final int NUMBER_OF_SPLITS = 2;
+    public static final String FROM_REGION_NAME = "Heap-MultiSemiSpace-From";
+    public static final String TO_REGION_NAME = "Heap-MultiSemiSpace-To";
+    public static final String FROM_GROW_REGION_NAME = "Heap-MultiSemiSpace-From-Grow";
+    public static final String TO_GROW_REGION_NAME = "Heap-MultiSemiSpace-To-Grow";
     public static final String LINEAR_GROW_POLICY_NAME = "Linear";
     public static final String DOUBLE_GROW_POLICY_NAME = "Double";
     public static final String NO_GROW_POLICY_NAME = "None";
 
     /**
-     * A VM option for specifying amount of memory to be reserved for allocating and raising an
+     * A VM option for specifying amount of memory to be reserved for allocating and raising anP
      * OutOfMemoryError when insufficient memory is available to satisfy an allocation request.
      *
      * @see #safetyZoneSize
@@ -101,27 +101,36 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
      */
     private static boolean VerifyReferences = false;
     static {
-        VMOptions.addFieldOption("-XX:", "VerifyReferences", SemiSpaceHeapScheme.class, "Do extra verification for each reference scanned by the GC", MaxineVM.Phase.PRISTINE);
+        VMOptions.addFieldOption("-XX:", "VerifyReferences", MultiSemiSpaceHeapScheme.class, "Do extra verification for each reference scanned by the GC", MaxineVM.Phase.PRISTINE);
     }
 
 
     private final CollectHeap collectHeap;
 
     @INSPECTED
-    private LinearAllocationMemoryRegion fromSpace = new LinearAllocationMemoryRegion(FROM_REGION_NAME);
+    private LinearAllocationMemoryRegion[] fromSpaces = new LinearAllocationMemoryRegion[NUMBER_OF_SPLITS];
 
     @INSPECTED
-    private LinearAllocationMemoryRegion toSpace = new LinearAllocationMemoryRegion(TO_REGION_NAME);
+    private LinearAllocationMemoryRegion[] toSpaces = new LinearAllocationMemoryRegion[NUMBER_OF_SPLITS];
 
     /**
      * Used when {@linkplain #grow(GrowPolicy) growing} the heap.
      */
-    private final LinearAllocationMemoryRegion growFromSpace = new LinearAllocationMemoryRegion(FROM_GROW_REGION_NAME);
+    private final LinearAllocationMemoryRegion[] growFromSpaces = new LinearAllocationMemoryRegion[NUMBER_OF_SPLITS];
 
     /**
      * Used when {@linkplain #grow(GrowPolicy) growing} the heap.
      */
-    private final LinearAllocationMemoryRegion growToSpace = new LinearAllocationMemoryRegion(TO_GROW_REGION_NAME);
+    private final LinearAllocationMemoryRegion[] growToSpaces = new LinearAllocationMemoryRegion[NUMBER_OF_SPLITS];
+
+    {
+        for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+            fromSpaces[i] = new LinearAllocationMemoryRegion(FROM_REGION_NAME + i);
+            toSpaces[i] = new LinearAllocationMemoryRegion(TO_REGION_NAME + i);
+            growFromSpaces[i] = new LinearAllocationMemoryRegion(FROM_GROW_REGION_NAME + i);
+            growToSpaces[i] = new LinearAllocationMemoryRegion(TO_GROW_REGION_NAME + i);
+        }
+    }
 
     /**
      * The amount of memory reserved for allocating and raising an OutOfMemoryError when insufficient
@@ -137,8 +146,7 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
     /**
      * The global allocation limit (minus the {@linkplain #safetyZoneSize safety zone}).
      */
-    private Address top;
-
+    private final static Address[] tops = new Address[NUMBER_OF_SPLITS];
 
     private final ResetTLAB resetTLAB = new ResetTLAB(){
         @Override
@@ -169,7 +177,7 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
     /**
      * Procedure used to verify a reference.
      */
-    private final DebugHeap.RefVerifier refVerifier = new DebugHeap.RefVerifier(toSpace);
+    private final DebugHeap.RefVerifier refVerifier = new DebugHeap.RefVerifier(toSpaces[0], toSpaces[1]);
 
     /**
      * Procedure used to verify GC root reference well-formedness.
@@ -181,11 +189,11 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
      */
     static boolean GCBeforeAllocation;
     static {
-        VMOptions.addFieldOption("-XX:", "GCBeforeAllocation", SemiSpaceHeapScheme.class,
+        VMOptions.addFieldOption("-XX:", "GCBeforeAllocation", MultiSemiSpaceHeapScheme.class,
             "Perform a garbage collection before every allocation from the global heap.", MaxineVM.Phase.PRISTINE);
     }
 
-    public SemiSpaceHeapScheme() {
+    public MultiSemiSpaceHeapScheme() {
         super();
         pinningSupportFlags = PIN_SUPPORT_FLAG.makePinSupportFlags(false, false, false);
         collectHeap = new CollectHeap();
@@ -196,14 +204,17 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
         super.initialize(phase);
 
         if (phase == MaxineVM.Phase.PRISTINE) {
-            allocateHeap();
+            allocateHeaps();
 
             safetyZoneSize = Math.max(safetyZoneSizeOption.getValue(), initialTlabSize().toInt());
 
-            top = toSpace.end().minus(safetyZoneSize);
+            for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+                final LinearAllocationMemoryRegion toSpace = toSpaces[i];
+                tops[i] = toSpace.end().minus(Offset.fromInt(safetyZoneSize));
 
-            if (MaxineVM.isDebug()) {
-                zapRegion(toSpace, GCCallbackPhase.INIT);
+                if (MaxineVM.isDebug()) {
+                    zapRegion(toSpace, GCCallbackPhase.INIT);
+                }
             }
             if (MaxineVM.isDebug()) {
                 VerifyReferences = true;
@@ -213,8 +224,10 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
 
             // From now on we can allocate
 
-            HeapScheme.Inspect.init(true);
-            HeapScheme.Inspect.notifyHeapRegions(toSpace, fromSpace);
+            Inspect.init(true);
+            for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+                Inspect.notifyHeapRegions(toSpaces[i], fromSpaces[i]);
+            }
             Heap.invokeGCCallbacks(GCCallbackPhase.INIT);
         } else if (phase == MaxineVM.Phase.STARTING) {
             final String growPolicy = growPolicyOption.getValue();
@@ -240,32 +253,49 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
 
     }
 
-    private void allocateHeap() {
+    private void allocateHeaps() {
         boolean heapAllocationOk;
-        final Size size = Heap.initialSize().dividedBy(2);
+        final Size size = Heap.initialSize().dividedBy(NUMBER_OF_SPLITS).dividedBy(2);
         Size heapAllocationSize = size;
-        if (!Heap.gcDisabled()) {
-            heapAllocationOk = !allocateSpace(fromSpace, size).isZero() && !allocateSpace(toSpace, size).isZero();
-        } else {
-            // If GC is disabled, then use all of -Xmx for toSpace
-            heapAllocationSize = Heap.maxSize();
-            heapAllocationOk = !allocateSpace(toSpace, heapAllocationSize).isZero();
-        }
-
-        if (!heapAllocationOk) {
-            MaxineVM.reportPristineMemoryFailure("object heap", "allocate", heapAllocationSize);
-        } else {
-            if (Heap.verbose()) {
-                Log.print("Allocated ");
-                Log.print(heapAllocationSize.toLong());
-                Log.println(" bytes of memory for object heap");
+        for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+            if (!Heap.gcDisabled()) {
+                heapAllocationOk =
+                        !allocateSpace(fromSpaces[i], size).isZero() && !allocateSpace(toSpaces[i], size).isZero();
+            } else {
+                // If GC is disabled, then use all of -Xmx for toSpace
+                heapAllocationSize = Heap.maxSize();
+                heapAllocationOk = !allocateSpace(toSpaces[i], heapAllocationSize).isZero();
             }
+
+            if (!heapAllocationOk) {
+                MaxineVM.reportPristineMemoryFailure("object heap", "allocate", heapAllocationSize);
+            } else {
+                if (Heap.verbose()) {
+                    Log.print("Allocated ");
+                    Log.print(heapAllocationSize.toLong());
+                    Log.print(" bytes of memory for object heap ");
+                    Log.println(i);
+                    Log.print("From Space ");
+                    Log.print(i);
+                    Log.print(" ");
+                    Log.print(fromSpaces[i].start());
+                    Log.print(" ");
+                    Log.println(fromSpaces[i].end());
+                    Log.print("To   Space ");
+                    Log.print(i);
+                    Log.print(" ");
+                    Log.print(toSpaces[i].start());
+                    Log.print(" ");
+                    Log.println(toSpaces[i].end());
+                }
+            }
+
         }
     }
 
     @INLINE
-    private Address allocationMark() {
-        return toSpace.mark().asAddress();
+    private Address allocationMark(int spaceIndex) {
+        return toSpaces[spaceIndex].mark().asAddress();
     }
 
     private static void startTimer(Timer timer) {
@@ -280,24 +310,32 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
         }
     }
 
+    @INLINE
+    private int getSplitIndex() {
+        return VmThread.current().id() % NUMBER_OF_SPLITS;
+    }
+
     private final class GC implements SpecialReferenceManager.GC {
 
         public boolean isReachable(Reference ref) {
             final Pointer origin = ref.toOrigin();
-            if (fromSpace.contains(origin)) {
-                final Reference forwardRef = Layout.readForwardRef(origin);
-                if (forwardRef.isZero()) {
-                    return false;
+            for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+                if (fromSpaces[i].contains(origin)) {
+                    final Reference forwardRef = Layout.readForwardRef(origin);
+                    if (forwardRef.isZero()) {
+                        return false;
+                    }
                 }
             }
             return true;
         }
 
         public Reference preserve(Reference ref) {
-            Pointer oldAllocationMark = allocationMark().asPointer();
+            final int splitIndex = getSplitIndex();
+            Pointer oldAllocationMark = allocationMark(splitIndex).asPointer();
             Reference newRef = mapRef(ref);
-            if (!oldAllocationMark.equals(allocationMark().asPointer())) {
-                moveReachableObjects(oldAllocationMark);
+            if (!oldAllocationMark.equals(allocationMark(splitIndex).asPointer())) {
+                moveReachableObjects(oldAllocationMark, splitIndex);
             }
             return newRef;
         }
@@ -310,7 +348,7 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
     /**
      * A procedure to update a reference so that it points to an object in 'toSpace'.
      *
-     * @see SemiSpaceHeapScheme#mapRef(Reference)
+     * @see MultiSemiSpaceHeapScheme#mapRef(Reference)
      */
     private final class RefUpdater extends PointerIndexVisitor {
         @Override
@@ -328,8 +366,8 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
      */
     final class CollectHeap extends GCOperation {
 
-        SemiSpaceGCRequest gcRequest() {
-            return asSemiSpaceGCRequest(callingThread().gcRequest);
+        MultiSemiSpaceGCRequest gcRequest() {
+            return asMultiSemiSpaceGCRequest(callingThread().gcRequest);
         }
 
         CollectHeap() {
@@ -353,80 +391,86 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
                 swapSemiSpaces(); // Swap semispaces. From--> To and To-->From
                 stopTimer(clearTimer);
 
-                refVerifier.setValidSpaces(fromSpace, toSpace);
+                refVerifier.setValidSpaces(toSpaces[0], toSpaces[1], fromSpaces[0], fromSpaces[1]);
                 if (Heap.logGCPhases()) {
-                    phaseLogger.logScanningRoots(VMLogger.Interval.BEGIN);
+                    phaseLogger.logScanningRoots(Interval.BEGIN);
                 }
                 startTimer(rootScanTimer);
                 heapRootsScanner.run(); // Start scanning the reachable objects from my roots.
                 stopTimer(rootScanTimer);
                 if (Heap.logGCPhases()) {
-                    phaseLogger.logScanningRoots(VMLogger.Interval.END);
+                    phaseLogger.logScanningRoots(Interval.END);
                 }
 
                 if (Heap.logGCPhases()) {
-                    phaseLogger.logScanningBootHeap(VMLogger.Interval.BEGIN);
+                    phaseLogger.logScanningBootHeap(Interval.BEGIN);
                 }
                 startTimer(bootHeapScanTimer);
                 scanBootHeap();
                 stopTimer(bootHeapScanTimer);
                 if (Heap.logGCPhases()) {
-                    phaseLogger.logScanningBootHeap(VMLogger.Interval.END);
+                    phaseLogger.logScanningBootHeap(Interval.END);
                 }
 
                 if (Heap.logGCPhases()) {
-                    phaseLogger.logScanningCode(VMLogger.Interval.BEGIN);
+                    phaseLogger.logScanningCode(Interval.BEGIN);
                 }
                 startTimer(codeScanTimer);
                 scanCode();
                 stopTimer(codeScanTimer);
                 if (Heap.logGCPhases()) {
-                    phaseLogger.logScanningCode(VMLogger.Interval.END);
+                    phaseLogger.logScanningCode(Interval.END);
                 }
 
                 if (Heap.logGCPhases()) {
-                    phaseLogger.logScanningImmortalHeap(VMLogger.Interval.BEGIN);
+                    phaseLogger.logScanningImmortalHeap(Interval.BEGIN);
                 }
                 startTimer(immortalSpaceScanTimer);
                 scanImmortalHeap();
                 stopTimer(immortalSpaceScanTimer);
                 if (Heap.logGCPhases()) {
-                    phaseLogger.logScanningImmortalHeap(VMLogger.Interval.END);
+                    phaseLogger.logScanningImmortalHeap(Interval.END);
                 }
 
                 if (Heap.logGCPhases()) {
-                    phaseLogger.logMovingReachable(VMLogger.Interval.BEGIN);
+                    phaseLogger.logMovingReachable(Interval.BEGIN);
                 }
                 startTimer(copyTimer);
-                moveReachableObjects(toSpace.start().asPointer());
+                for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+                    moveReachableObjects(toSpaces[i].start().asPointer(), i);
+                }
                 stopTimer(copyTimer);
                 if (Heap.logGCPhases()) {
-                    phaseLogger.logMovingReachable(VMLogger.Interval.END);
+                    phaseLogger.logMovingReachable(Interval.END);
                 }
 
                 if (Heap.logGCPhases()) {
-                    phaseLogger.logProcessingSpecialReferences(VMLogger.Interval.BEGIN);
+                    phaseLogger.logProcessingSpecialReferences(Interval.BEGIN);
                 }
                 startTimer(weakRefTimer);
                 SpecialReferenceManager.processDiscoveredSpecialReferences(refForwarder);
                 stopTimer(weakRefTimer);
                 stopTimer(gcTimer);
                 if (Heap.logGCPhases()) {
-                    phaseLogger.logProcessingSpecialReferences(VMLogger.Interval.END);
+                    phaseLogger.logProcessingSpecialReferences(Interval.END);
                 }
 
                 // Bring the To-Space marks up to date, mainly for debugging.
-                toSpace.mark.set(allocationMark()); // not otherwise updated during move.
+                for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+                    toSpaces[i].mark.set(allocationMark(i)); // not otherwise updated during move.
+                }
 
                 // The reclaiming phase doesn't do anything substantial in a semispace collector since all
                 // space of the from space is implicitly reclaimed once the liveness analysis (i.e.,
                 // the copying of all objects reachable from roots) is done.
-                HeapScheme.Inspect.notifyHeapPhaseChange(HeapPhase.RECLAIMING);
+                Inspect.notifyHeapPhaseChange(HeapPhase.RECLAIMING);
 
                 // Now officially mark From-space as having no allocations.
-                fromSpace.mark.set(fromSpace.start());
+                for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+                    fromSpaces[i].mark.set(fromSpaces[i].start());
+                }
 
-                final SemiSpaceGCRequest gcRequest = gcRequest();
+                final MultiSemiSpaceGCRequest gcRequest = gcRequest();
                 gcRequest.lastInvocationCount = invocationCount;
 
                 lastGCTime = System.currentTimeMillis();
@@ -436,11 +480,11 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
                     Log.print(lastGCTime - startGCTime);
                     Log.println(" ms --");
                 }
-                HeapScheme.Inspect.notifyHeapPhaseChange(HeapPhase.MUTATING);
+                Inspect.notifyHeapPhaseChange(HeapPhase.MUTATING);
                 Heap.invokeGCCallbacks(GCCallbackPhase.AFTER);
 
                 // Post-verification of the heap.
-                refVerifier.setValidHeapSpace(toSpace);
+                refVerifier.setValidSpaces(toSpaces[0], toSpaces[1]);
                 verifyObjectSpaces(GCCallbackPhase.AFTER);
 
                 if (Heap.logGCTime()) {
@@ -494,34 +538,48 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
     }
 
     private void swapSemiSpaces() {
-        final Address oldFromSpaceStart = fromSpace.start();
-        final Size oldFromSpaceSize = fromSpace.size();
+        Address oldFromSpaceStart;
+        Size oldFromSpaceSize;
+        for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+            oldFromSpaceStart = fromSpaces[i].start();
+            oldFromSpaceSize = fromSpaces[i].size();
 
-        // Inspectability: stopping the VM between here and the phase notification below will confuse the Inspector
+            // Inspectability: stopping the VM between here and the phase notification below will confuse the Inspector
 
-        fromSpace.setStart(toSpace.start());
-        fromSpace.setSize(toSpace.size());
-        fromSpace.mark.set(toSpace.getAllocationMark());
+            fromSpaces[i].setStart(toSpaces[i].start());
+            fromSpaces[i].setSize(toSpaces[i].size());
+            fromSpaces[i].mark.set(toSpaces[i].getAllocationMark());
 
-        toSpace.setStart(oldFromSpaceStart);
-        toSpace.setSize(oldFromSpaceSize);
-        toSpace.mark.set(toSpace.start());
+            toSpaces[i].setStart(oldFromSpaceStart);
+            toSpaces[i].setSize(oldFromSpaceSize);
+            toSpaces[i].mark.set(toSpaces[i].start());
+        }
+
 
         // For the purposes of inspection, we declare this phase change immediately after the swap;
         // The Inspector gets confused it the VM stops after the swap, but when the phase
         // appears to still be mutating.
-        HeapScheme.Inspect.notifyHeapPhaseChange(HeapPhase.ANALYZING);
+        Inspect.notifyHeapPhaseChange(HeapPhase.ANALYZING);
 
-        top = toSpace.end();
-        // If we are currently using the safety zone, we must not install it in the swapped space
-        // as that could cause gcAllocate to fail trying to copying too much live data.
-        if (!inSafetyZone) {
-            top = top.minus(safetyZoneSize);
+        for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+            tops[i] = toSpaces[i].end();
+            // If we are currently using the safety zone, we must not install it in the swapped space
+            // as that could cause gcAllocate to fail trying to copying too much live data.
+            if (!inSafetyZone) {
+                tops[i] = tops[i].minus(safetyZoneSize);
+            }
         }
     }
 
-    private Size immediateFreeSpace() {
-        return top.minus(allocationMark()).asSize();
+    /**
+     * Return the immediateFreeSpace.
+     * FIXME: make it return the immediate free space for the thread requesting the allocation and only return the
+     * max if there is not enough space on the said thread
+     *
+     * @return
+     */
+    private Size immediateFreeSpace(int split) {
+        return tops[split].minus(allocationMark(split)).asSize();
     }
 
     /**
@@ -542,33 +600,35 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
      */
     private Reference mapRef(Reference ref) {
         final Pointer fromOrigin = ref.toOrigin();
-        if (fromSpace.contains(fromOrigin)) {
-            final Reference forwardRef = Layout.readForwardRef(fromOrigin);
-            if (!forwardRef.isZero()) {
-                return forwardRef;
-            }
-            if (VerifyReferences) {
-                refVerifier.verifyRefAtIndex(Address.zero(), 0, ref);
-            }
-            final Pointer fromCell = Layout.originToCell(fromOrigin);
-            final Size size = Layout.size(fromOrigin);
-            final Pointer toCell = gcAllocate(size);
-            if (DebugHeap.isTagging()) {
-                DebugHeap.writeCellTag(toCell);
-            }
+        for (int splitIndex = 0; splitIndex < NUMBER_OF_SPLITS; splitIndex++) {
+            if (fromSpaces[splitIndex].contains(fromOrigin)) {
+                final Reference forwardRef = Layout.readForwardRef(fromOrigin);
+                if (!forwardRef.isZero()) {
+                    return forwardRef;
+                }
+                if (VerifyReferences) {
+                    refVerifier.verifyRefAtIndex(Address.zero(), 0, ref);
+                }
+                final Pointer fromCell = Layout.originToCell(fromOrigin);
+                final Size    size     = Layout.size(fromOrigin);
+                final Pointer toCell   = gcAllocate(size);
+                if (DebugHeap.isTagging()) {
+                    DebugHeap.writeCellTag(toCell);
+                }
 
-            if (detailLogger.enabled()) {
-                final Hub hub = UnsafeCast.asHub(Layout.readHubReference(ref).toJava());
-                detailLogger.logForward(hub.classActor.id, Pointer.zero(), fromCell, toCell, size.toInt());
+                if (detailLogger.enabled()) {
+                    final Hub hub = UnsafeCast.asHub(Layout.readHubReference(ref).toJava());
+                    detailLogger.logForward(hub.classActor.id, Pointer.zero(), fromCell, toCell, size.toInt());
+                }
+
+                Memory.copyBytes(fromCell, toCell, size);
+
+                final Pointer   toOrigin = Layout.cellToOrigin(toCell);
+                final Reference toRef    = Reference.fromOrigin(toOrigin);
+                Layout.writeForwardRef(fromOrigin, toRef);
+
+                return toRef;
             }
-
-            Memory.copyBytes(fromCell, toCell, size);
-
-            final Pointer toOrigin = Layout.cellToOrigin(toCell);
-            final Reference toRef = Reference.fromOrigin(toOrigin);
-            Layout.writeForwardRef(fromOrigin, toRef);
-
-            return toRef;
         }
         return ref;
     }
@@ -626,9 +686,9 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
         return cell.plus(Layout.size(origin));
     }
 
-    void moveReachableObjects(Pointer start) {
+    void moveReachableObjects(Pointer start, int splitIndex) {
         Pointer cell = start;
-        while (cell.lessThan(allocationMark())) {
+        while (cell.lessThan(allocationMark(splitIndex))) {
             cell = DebugHeap.checkDebugCellTag(start, cell);
             cell = visitCell(cell);
         }
@@ -641,15 +701,17 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
      * @param visitor
      */
     private void visitCells(CellVisitor visitor) {
-        Pointer start = toSpace.start().asPointer();
-        Pointer cell = start;
-        if (Heap.verbose()) {
-            Log.print("Visit Region: To Space");
-            Log.println();
-        }
-        while (cell.isNotZero() && cell.lessThan(allocationMark()) && cell.getWord().isNotZero()) {
-            cell = DebugHeap.checkDebugCellTag(start, cell);
-            cell = visitor.visitCell(cell);
+        for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+            Pointer start = toSpaces[i].start().asPointer();
+            Pointer cell  = start;
+            if (Heap.verbose()) {
+                Log.print("Visit Region: To Space");
+                Log.println();
+            }
+            while (cell.isNotZero() && cell.lessThan(allocationMark(i)) && cell.getWord().isNotZero()) {
+                cell = DebugHeap.checkDebugCellTag(start, cell);
+                cell = visitor.visitCell(cell);
+            }
         }
     }
 
@@ -668,14 +730,15 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
         ImmortalHeap.visitCells(this);
     }
 
+    // FIXME: for now all heaps grow together, fix to allow individual heaps to grow on their own
     private boolean cannotGrow() {
-        return fromSpace.size().isZero() || fromSpace.size().greaterEqual(Heap.maxSize().dividedBy(2));
+        return fromSpaces[0].size().isZero() || fromSpaces[0].size().greaterEqual(Heap.maxSize().dividedBy(NUMBER_OF_SPLITS).dividedBy(2));
     }
 
     /**
      * Grow the semispaces to be of larger size.
      *
-     * @param preGc true if prior to executing collector thread to copy {@link #toSpace} to (grown) {@link #fromSpace}
+     * @param preGc true if prior to executing collector thread to copy {@link #toSpaces} to (grown) {@link #fromSpaces}
      * @return true iff both spaces can be grown
      */
     private boolean growSpaces(boolean preGc, GrowPolicy growPolicy) {
@@ -692,30 +755,35 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
             // It is important to know now that we can allocate both spaces of the new size
             // and, if we cannot, to leave things as they are, so that the VM can continue
             // using the safety zone and perhaps then free enough space to continue.
-            final Size size = Size.min(growPolicy.growth(fromSpace.size()), Heap.maxSize().dividedBy(2));
+            final Size size = Size.min(growPolicy.growth(fromSpaces[0].size()),
+                    Heap.maxSize().dividedBy(NUMBER_OF_SPLITS).dividedBy(2));
             if (preGc && Heap.verbose()) {
                 Log.print("...new heap size: ");
                 Log.println(size.toLong());
             }
-            final Address fromBase = allocateSpace(growFromSpace, size);
-            final Address tempBase = allocateSpace(growToSpace, size);
-            if (fromBase.isZero() || tempBase.isZero()) {
-                if (!fromBase.isZero()) {
-                    deallocateSpace(growFromSpace);
+            for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+                final Address fromBase = allocateSpace(growFromSpaces[i], size);
+                final Address tempBase = allocateSpace(growToSpaces[i], size);
+                if (fromBase.isZero() || tempBase.isZero()) {
+                    if (!fromBase.isZero()) {
+                        deallocateSpace(growFromSpaces[i]);
+                    }
+                    if (Heap.verbose()) {
+                        Log.println("...grow failed, can't allocate spaces");
+                    }
+                    return false;
                 }
-                if (Heap.verbose()) {
-                    Log.println("...grow failed, can't allocate spaces");
-                }
-                return false;
+                // return memory in 'fromSpace'
+                deallocateSpace(fromSpaces[i]);
+                copySpaceState(growFromSpaces[i], fromSpaces[i]);
             }
-            // return memory in 'fromSpace'
-            deallocateSpace(fromSpace);
-            copySpaceState(growFromSpace, fromSpace);
         } else {
             // executing the collector thread swapped the spaces
             // so we are again updating _fromSpace but with _growToSpace.
-            deallocateSpace(fromSpace);
-            copySpaceState(growToSpace, fromSpace);
+            for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+                deallocateSpace(fromSpaces[i]);
+                copySpaceState(growToSpaces[i], fromSpaces[i]);
+            }
         }
         if (preGc && Heap.verbose()) {
             Log.println("...grow ok");
@@ -746,45 +814,48 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
         return result;
     }
 
-    private static final class SemiSpaceGCRequest extends GCRequest {
-        protected SemiSpaceGCRequest(VmThread thread) {
+    private static final class MultiSemiSpaceGCRequest extends GCRequest {
+        protected MultiSemiSpaceGCRequest(VmThread thread) {
             super(thread);
         }
     }
 
     @INTRINSIC(UNSAFE_CAST)
-    private static native SemiSpaceGCRequest asSemiSpaceGCRequest(GCRequest gcRequest);
+    private static native MultiSemiSpaceGCRequest asMultiSemiSpaceGCRequest(GCRequest gcRequest);
 
     public GCRequest createThreadLocalGCRequest(VmThread vmThread) {
-        return new SemiSpaceGCRequest(vmThread);
+        return new MultiSemiSpaceGCRequest(vmThread);
     }
 
     public boolean collectGarbage() {
         // We invoke the VMTI callbacks here and not via the GCCallBack so that
         // they occur on the actual thread causing the GC and not the VM operation thread.
         VMTI.handler().beginGC();
-        boolean result = collectGarbageImpl(asSemiSpaceGCRequest(VmThread.current().gcRequest));
+        boolean result = collectGarbageImpl(asMultiSemiSpaceGCRequest(VmThread.current().gcRequest));
         VMTI.handler().endGC();
         return result;
     }
 
-    private boolean collectGarbageImpl(SemiSpaceGCRequest gcRequest) {
+    private boolean collectGarbageImpl(MultiSemiSpaceGCRequest gcRequest) {
         final Size requestedFreeSpace = gcRequest.requestedBytes;
-        if ((gcRequest.explicit && !DisableExplicitGC) || immediateFreeSpace().lessThan(requestedFreeSpace)) {
+        int split = getSplitIndex();
+        if ((gcRequest.explicit && !DisableExplicitGC) || immediateFreeSpace(split).lessThan(requestedFreeSpace)) {
             executeGC();
         }
-        if (immediateFreeSpace().greaterEqual(requestedFreeSpace)) {
+        if (immediateFreeSpace(split).greaterEqual(requestedFreeSpace)) {
             // check to see if we can reset safety zone
             if (inSafetyZone) {
-                if (top.minus(allocationMark()).greaterThan(safetyZoneSize)) {
-                    top = top.minus(safetyZoneSize);
-                    inSafetyZone = false;
+                for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+                    if (tops[i].minus(allocationMark(i)).greaterThan(safetyZoneSize)) {
+                        tops[i] = tops[i].minus(safetyZoneSize);
+                        inSafetyZone = false;
+                    }
                 }
             }
             return true;
         }
         while (grow(growPolicy)) {
-            if (immediateFreeSpace().greaterEqual(requestedFreeSpace)) {
+            if (immediateFreeSpace(split).greaterEqual(requestedFreeSpace)) {
                 return true;
             }
         }
@@ -792,11 +863,19 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
     }
 
     public Size reportFreeSpace() {
-        return immediateFreeSpace();
+        Size freeSpace = Size.zero();
+        for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+            freeSpace = freeSpace.plus(immediateFreeSpace(i));
+        }
+        return freeSpace;
     }
 
     public Size reportUsedSpace() {
-        return allocationMark().minus(toSpace.start()).asSize();
+        Size total = Size.zero();
+        for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+            total = total.plus(allocationMark(i).minus(toSpaces[i].start()).asSize());
+        }
+        return total;
     }
 
     /**
@@ -807,14 +886,19 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
      * @param size the size of the cell being copied
      * @return the start of the allocated cell in 'to space'
      */
-    public Pointer gcAllocate(Size size) {
-        Pointer cell = allocationMark().asPointer();
+    public Pointer gcAllocate(Size size, int splitIndex) {
+        Pointer cell = allocationMark(splitIndex).asPointer();
         if (DebugHeap.isTagging()) {
             cell = Platform.target().arch.is64bit() ? cell.plusWords(1) : cell.plusWords(2);
         }
-        toSpace.mark.set(cell.plus(size));
-        FatalError.check(allocationMark().lessThan(top), "GC allocation overflow");
+        toSpaces[splitIndex].mark.set(cell.plus(size));
+        FatalError.check(allocationMark(splitIndex).lessThan(tops[splitIndex]), "GC allocation overflow");
         return cell;
+    }
+
+    public Pointer gcAllocate(Size size) {
+        final int splitIndex = getSplitIndex();
+        return gcAllocate(size, splitIndex);
     }
 
     private boolean inSafetyZone; // set after we have thrown OutOfMemoryError and are using the safety zone
@@ -918,15 +1002,16 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
         Pointer oldAllocationMark;
         Pointer cell;
         Address end;
+        final int splitIndex = getSplitIndex();
         do {
             if (GCBeforeAllocation && !VmThread.isAttaching()) {
                 GCRequest.setGCRequest(size);
                 Heap.collectGarbage();
             }
-            oldAllocationMark = allocationMark().asPointer();
+            oldAllocationMark = allocationMark(splitIndex).asPointer();
             cell = adjustForDebugTag ? DebugHeap.adjustForDebugTag(oldAllocationMark) : oldAllocationMark;
             end = cell.plus(size);
-            while (end.greaterThan(top)) {
+            while (end.greaterThan(tops[splitIndex])) {
                 GCRequest.setGCRequest(size);
                 if (!Heap.collectGarbage()) {
                     /*
@@ -940,7 +1025,7 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
                         FatalError.unexpected("Out of memory again after throwing OutOfMemoryError");
                     } else {
                         // Use the safety region to do the throw
-                        top = top.plus(safetyZoneSize);
+                        tops[splitIndex] = tops[splitIndex].plus(safetyZoneSize);
                         inSafetyZone = true;
                         // This new will now be ok
                         if (Heap.verbose()) {
@@ -949,11 +1034,11 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
                         throw new OutOfMemoryError();
                     }
                 }
-                oldAllocationMark = allocationMark().asPointer();
+                oldAllocationMark = allocationMark(splitIndex).asPointer();
                 cell = adjustForDebugTag ? DebugHeap.adjustForDebugTag(oldAllocationMark) : oldAllocationMark;
                 end = cell.plus(size);
             }
-        } while (!toSpace.mark.compareAndSwap(oldAllocationMark, end).equals(oldAllocationMark));
+        } while (!toSpaces[splitIndex].mark.compareAndSwap(oldAllocationMark, end).equals(oldAllocationMark));
 
         // Zero the allocated chunk before returning
         Memory.clearWords(cell, size.dividedBy(Word.size()).toInt());
@@ -976,7 +1061,12 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
     }
 
     public boolean contains(Address address) {
-        return toSpace.contains(address);
+        for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+            if (toSpaces[i].contains(address)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -991,7 +1081,9 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
         }
 
         if (MaxineVM.isDebug()) {
-            zapRegion(fromSpace, when);
+            for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+                zapRegion(fromSpaces[i], when);
+            }
         }
 
         if (Heap.logGCPhases()) {
@@ -1007,14 +1099,19 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
         }
 
         if (MaxineVM.isDebug()) {
-            if (Heap.logGCPhases()) {
-                phaseLogger.logVerifyingHeapObjects(Interval.BEGIN);
-                phaseLogger.logVerifyingRegion(toSpace, toSpace.start().asPointer(), allocationMark());
+            for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+                if (Heap.logGCPhases()) {
+                    phaseLogger.logVerifyingHeapObjects(Interval.BEGIN);
+                }
+                phaseLogger.logVerifyingRegion(toSpaces[i], toSpaces[i].start().asPointer(), allocationMark(i));
             }
             if (Heap.verbose()) {
                 Log.println("--To Space Verification: Start");
             }
-            DebugHeap.verifyRegion(toSpace, toSpace.start().asPointer(), allocationMark(), refVerifier, detailLogger);
+            for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+                DebugHeap.verifyRegion(toSpaces[i], toSpaces[i].start().asPointer(), allocationMark(i), refVerifier,
+                        detailLogger);
+            }
             if (Heap.verbose()) {
                 Log.println("--To Space Verification: End");
             }
@@ -1063,11 +1160,14 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
 
     private void logSpaces() {
         if (Heap.verbose()) {
-            logSpace(fromSpace);
-            logSpace(toSpace);
-            Log.print("top "); Log.print(top);
-            Log.print(", allocation mark ");
-            Log.println(allocationMark());
+            for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+                logSpace(fromSpaces[i]);
+                logSpace(toSpaces[i]);
+                Log.print("top ");
+                Log.print(tops[i]);
+                Log.print(", allocation mark ");
+                Log.println(allocationMark(i));
+            }
         }
     }
 
@@ -1097,26 +1197,28 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
             final Size pageAlignedAmount = amount.asAddress().alignUp(Platform.platform().pageSize).asSize().dividedBy(2);
             logSpaces();
             executeGC();
-            if (immediateFreeSpace().greaterEqual(pageAlignedAmount)) {
-                // give back part of the existing spaces
-                if (Heap.verbose()) {
+            for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+                if (immediateFreeSpace(i).greaterEqual(pageAlignedAmount)) {
+                    // give back part of the existing spaces
+                    if (Heap.verbose()) {
+                        logSpaces();
+                    }
+                    final int amountAsInt = pageAlignedAmount.toInt();
+                    fromSpaces[i].setSize(fromSpaces[i].size().minus(amountAsInt));
+                    toSpaces[i].setSize(toSpaces[i].size().minus(amountAsInt));
+                    tops[i] = tops[i].minus(amountAsInt);
+                    VirtualMemory.deallocate(fromSpaces[i].end(), pageAlignedAmount, VirtualMemory.Type.HEAP);
+                    VirtualMemory.deallocate(toSpaces[i].end(), pageAlignedAmount, VirtualMemory.Type.HEAP);
                     logSpaces();
+                    result = true;
                 }
-                final int amountAsInt = pageAlignedAmount.toInt();
-                fromSpace.setSize(fromSpace.size().minus(amountAsInt));
-                toSpace.setSize(toSpace.size().minus(amountAsInt));
-                top = top.minus(amountAsInt);
-                VirtualMemory.deallocate(fromSpace.end(), pageAlignedAmount, VirtualMemory.Type.HEAP);
-                VirtualMemory.deallocate(toSpace.end(), pageAlignedAmount, VirtualMemory.Type.HEAP);
-                logSpaces();
-                result = true;
             }
         }
     }
 
     @Override
     public boolean decreaseMemory(Size amount) {
-        HeapScheme.Inspect.notifyDecreaseMemoryRequested(amount);
+        Inspect.notifyDecreaseMemoryRequested(amount);
         ShrinkHeap shrinkHeap = new ShrinkHeap(amount);
         synchronized (HEAP_LOCK) {
             shrinkHeap.submit();
@@ -1142,18 +1244,21 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
              * This could be smaller than the existing spaces so we need to check.
              * It's unfortunate but that's the nature of the semispace scheme.
              */
-            final Size pageAlignedAmount = amount.asAddress().alignUp(Platform.platform().pageSize).asSize().dividedBy(2);
-            if (pageAlignedAmount.greaterThan(fromSpace.size())) {
-                // grow adds the current space size to the amount in the grow policy
-                increaseGrowPolicy.setAmount(pageAlignedAmount.minus(fromSpace.size()));
-                result = grow(increaseGrowPolicy);
+            final Size pageAlignedAmount =
+                    amount.asAddress().alignUp(Platform.platform().pageSize).asSize().dividedBy(NUMBER_OF_SPLITS).dividedBy(2);
+            for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+                if (pageAlignedAmount.greaterThan(fromSpaces[i].size())) {
+                    // grow adds the current space size to the amount in the grow policy
+                    increaseGrowPolicy.setAmount(pageAlignedAmount.minus(fromSpaces[i].size()));
+                    result = grow(increaseGrowPolicy);
+                }
             }
         }
     }
 
     @Override
     public boolean increaseMemory(Size amount) {
-        HeapScheme.Inspect.notifyIncreaseMemoryRequested(amount);
+        Inspect.notifyIncreaseMemoryRequested(amount);
         GrowHeap growHeap = new GrowHeap(amount);
         synchronized (HEAP_LOCK) {
             growHeap.submit();
@@ -1169,19 +1274,23 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
     }
 
     /**
-     * The heap starting address is the lower starting address between the {@link #toSpace} and {@link #fromSpace}
-     * since those two objects are swapping in {@link SemiSpaceHeapScheme} after every GC.
+     * The heap starting address is the lower starting address between the {@link #toSpaces} and {@link #fromSpaces}
+     * since those two objects are swapping in {@link MultiSemiSpaceHeapScheme} after every GC.
      * @return
      */
     @Override
     public Address getHeapStartAddress() {
-        return toSpace.start().lessThan(fromSpace.start()) ? toSpace.start() : fromSpace.start();
+        throw FatalError.unexpected("NUMAProfiler does not support MultiSemiSpaceHeapScheme yet");
     }
 
     @Override
     public void forAllSpaces(Pointer.Procedure procedure) {
-        procedure.run(Reference.fromJava(fromSpace).toOrigin());
-        procedure.run(Reference.fromJava(toSpace).toOrigin());
+        for (int i = 0; i < fromSpaces.length; i++) {
+            procedure.run(Reference.fromJava(fromSpaces[0]).toOrigin());
+        }
+        for (int i = 0; i < toSpaces.length; i++) {
+            procedure.run(Reference.fromJava(toSpaces[0]).toOrigin());
+        }
     }
 
     public boolean pin(Object object) {
@@ -1242,19 +1351,21 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
 
     @Override
     public GarbageCollectorMXBean getGarbageCollectorMXBean() {
-        return new SemiSpaceGarbageCollectorMXBean();
+        return new MultiSemiSpaceGarbageCollectorMXBean();
     }
 
-    private final class SemiSpaceGarbageCollectorMXBean extends HeapSchemeAdaptor.GarbageCollectorMXBeanAdaptor {
-        private SemiSpaceGarbageCollectorMXBean() {
-            super("SemiSpace");
-            add(new SemiSpaceMemoryPoolMXBean(fromSpace, this));
-            add(new SemiSpaceMemoryPoolMXBean(toSpace, this));
+    private final class MultiSemiSpaceGarbageCollectorMXBean extends GarbageCollectorMXBeanAdaptor {
+        private MultiSemiSpaceGarbageCollectorMXBean() {
+            super("MultiSemiSpace");
+            for (int i = 0; i < NUMBER_OF_SPLITS; i++) {
+                add(new MultiSemiSpaceMemoryPoolMXBean(fromSpaces[i], this));
+                add(new MultiSemiSpaceMemoryPoolMXBean(toSpaces[i], this));
+            }
         }
     }
 
-    private final class SemiSpaceMemoryPoolMXBean extends MemoryPoolMXBeanAdaptor {
-        SemiSpaceMemoryPoolMXBean(MemoryRegion region, MemoryManagerMXBean manager) {
+    private final class MultiSemiSpaceMemoryPoolMXBean extends MemoryPoolMXBeanAdaptor {
+        MultiSemiSpaceMemoryPoolMXBean(MemoryRegion region, MemoryManagerMXBean manager) {
             super(MemoryType.HEAP, region, manager);
         }
     }
@@ -1386,17 +1497,17 @@ public class SemiSpaceHeapScheme extends HeapSchemeWithTLAB implements CellVisit
     @VMLoggerInterface(parent = HeapScheme.TimeLogger.class)
     private interface TimeLoggerInterface {
         void stackReferenceMapPreparationTime(
-            @VMLogParam(name = "stackReferenceMapPreparationTime") long stackReferenceMapPreparationTime);
+                @VMLogParam(name = "stackReferenceMapPreparationTime") long stackReferenceMapPreparationTime);
 
         void phaseTimes(
-            @VMLogParam(name = "invocationCount") int invocationCount,
-            @VMLogParam(name = "clearTime") long clearTime,
-            @VMLogParam(name = "rootScanTime") long rootScanTime,
-            @VMLogParam(name = "bootHeapScanTime") long bootHeapScanTime,
-            @VMLogParam(name = "codeScanTime") long codeScanTime,
-            @VMLogParam(name = "copyTime") long copyTime,
-            @VMLogParam(name = "weakRefTime") long weakRefTime,
-            @VMLogParam(name = "gcTime") long gcTime);
+                @VMLogParam(name = "invocationCount") int invocationCount,
+                @VMLogParam(name = "clearTime") long clearTime,
+                @VMLogParam(name = "rootScanTime") long rootScanTime,
+                @VMLogParam(name = "bootHeapScanTime") long bootHeapScanTime,
+                @VMLogParam(name = "codeScanTime") long codeScanTime,
+                @VMLogParam(name = "copyTime") long copyTime,
+                @VMLogParam(name = "weakRefTime") long weakRefTime,
+                @VMLogParam(name = "gcTime") long gcTime);
     }
 
     public static final class TimeLogger extends TimeLoggerAuto {
